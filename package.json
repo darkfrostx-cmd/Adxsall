@@ -1,0 +1,12 @@
+{
+  "name": "adxs-knowledge-scraper",
+  "version": "1.0.0",
+  "description": "Interactive ADXS.org scraper UI with local proxy helper",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

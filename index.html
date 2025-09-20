@@ -28,6 +28,10 @@
         <p>Define the scraping batch, select scraping modes, and adjust content capture options.</p>
       </div>
       <div class="panel-body">
+        <div class="inline-warning" id="proxyWarning" role="alert" hidden>
+          Live scraping requires the bundled local helper server. Follow the README steps to run <code>npm install</code> and
+          <code>npm run dev</code>, then reload this page from <code>http://localhost:3000</code>.
+        </div>
         <label class="field">
           <span class="field-label">Base URL</span>
           <input type="url" id="baseUrl" value="https://www.adxs.org" placeholder="https://www.adxs.org" required>
@@ -98,6 +102,7 @@
           <button type="button" role="tab" aria-selected="true" aria-controls="previewPane" class="tab active" data-tab="preview">Preview</button>
           <button type="button" role="tab" aria-selected="false" aria-controls="statsPane" class="tab" data-tab="stats">Statistics</button>
           <button type="button" role="tab" aria-selected="false" aria-controls="validationPane" class="tab" data-tab="validation">Validation</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="documentsPane" class="tab" data-tab="documents">Documents</button>
           <button type="button" role="tab" aria-selected="false" aria-controls="logsPane" class="tab" data-tab="logs">Logs</button>
         </div>
       <div class="tab-panels">
@@ -145,9 +150,52 @@
           <div class="empty-state" id="validationEmpty">Run a scrape to populate validation results.</div>
           <ul id="validationList" class="validation-list" hidden></ul>
         </section>
+        <section id="documentsPane" class="tab-panel" role="tabpanel" aria-hidden="true">
+          <div class="documents-intro">
+            <p>Select sections from the scraped pages to assemble focused documents. Give each document a clear name so you can
+              export them independently.</p>
+          </div>
+          <div class="empty-state" id="documentsEmpty">Scrape at least one page to unlock section selection.</div>
+          <div id="documentBuilder" class="document-builder" hidden></div>
+          <div class="document-actions" id="documentActions" hidden>
+            <label class="field">
+              <span class="field-label">Document name</span>
+              <input type="text" id="documentName" placeholder="e.g. Diagnostics overview">
+            </label>
+            <button type="button" class="control primary" id="createDocumentBtn">Create document from selected sections</button>
+            <button type="button" class="control" id="clearSelectionBtn">Clear selection</button>
+          </div>
+          <div id="documentList" class="document-list" hidden></div>
+        </section>
         <section id="logsPane" class="tab-panel" role="tabpanel" aria-hidden="true">
           <ul id="logList" class="log-list"></ul>
         </section>
+      </div>
+    </section>
+
+    <section class="panel structure" aria-labelledby="structure-heading">
+      <div class="panel-header">
+        <h2 id="structure-heading">Site structure</h2>
+        <p>Load the ADXS sitemap, explore categories, and choose the sections that should feed the next scrape.</p>
+      </div>
+      <div class="panel-body structure-body">
+        <div class="structure-intro">
+          <p>Selections made here are added to the scraping queue automatically. Combine them with manual paths when you need a
+            custom batch.</p>
+        </div>
+        <div class="structure-toolbar" id="structureActions">
+          <button type="button" class="chip-button" data-action="refresh-structure">Refresh sitemap</button>
+          <button type="button" class="chip-button" data-action="select-all">Select all</button>
+          <button type="button" class="chip-button" data-action="clear-selection">Clear selection</button>
+          <button type="button" class="chip-button" data-action="expand-all">Expand all</button>
+          <button type="button" class="chip-button" data-action="collapse-all">Collapse all</button>
+        </div>
+        <div class="structure-summary">
+          <p id="structureSummaryLabel">Loading sitemap…</p>
+          <div class="structure-chips" id="structureChips"></div>
+        </div>
+        <div id="structureStatus" class="structure-status" role="status" hidden></div>
+        <div id="structureTree" class="structure-tree" role="tree" aria-label="ADXS sitemap"></div>
       </div>
     </section>
   </main>
