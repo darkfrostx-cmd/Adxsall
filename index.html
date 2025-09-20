@@ -94,11 +94,12 @@
           <button type="button" class="export" id="copyClipboard">Copy summary</button>
         </div>
       </div>
-      <div class="tabs" role="tablist">
-        <button type="button" role="tab" aria-selected="true" aria-controls="previewPane" class="tab active" data-tab="preview">Preview</button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="statsPane" class="tab" data-tab="stats">Statistics</button>
-        <button type="button" role="tab" aria-selected="false" aria-controls="logsPane" class="tab" data-tab="logs">Logs</button>
-      </div>
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" aria-selected="true" aria-controls="previewPane" class="tab active" data-tab="preview">Preview</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="statsPane" class="tab" data-tab="stats">Statistics</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="validationPane" class="tab" data-tab="validation">Validation</button>
+          <button type="button" role="tab" aria-selected="false" aria-controls="logsPane" class="tab" data-tab="logs">Logs</button>
+        </div>
       <div class="tab-panels">
         <section id="previewPane" class="tab-panel active" role="tabpanel">
           <div class="empty-state" id="previewEmpty">No pages scraped yet. Start a session to preview content.</div>
@@ -131,6 +132,18 @@
               <dd id="statWords">0</dd>
             </div>
           </dl>
+        </section>
+        <section id="validationPane" class="tab-panel" role="tabpanel" aria-hidden="true">
+          <div class="validation-overview">
+            <div class="validation-status" id="validationStatus">Awaiting results</div>
+            <div class="validation-counts">
+              <span class="count pass">Pass <strong id="validationPassCount">0</strong></span>
+              <span class="count warning">Warnings <strong id="validationWarnCount">0</strong></span>
+              <span class="count error">Errors <strong id="validationErrorCount">0</strong></span>
+            </div>
+          </div>
+          <div class="empty-state" id="validationEmpty">Run a scrape to populate validation results.</div>
+          <ul id="validationList" class="validation-list" hidden></ul>
         </section>
         <section id="logsPane" class="tab-panel" role="tabpanel" aria-hidden="true">
           <ul id="logList" class="log-list"></ul>

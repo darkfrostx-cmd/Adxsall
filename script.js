@@ -25,6 +25,7 @@
     updateExports();
     renderPreview();
     renderStats();
+    renderValidation();
     renderLogs();
   });
 
@@ -54,6 +55,12 @@
     elements.tabButtons = Array.from(document.querySelectorAll('.tab'));
     elements.tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
     elements.exportButtons = Array.from(document.querySelectorAll('.export[data-export]'));
+    elements.validationStatus = document.getElementById('validationStatus');
+    elements.validationPassCount = document.getElementById('validationPassCount');
+    elements.validationWarnCount = document.getElementById('validationWarnCount');
+    elements.validationErrorCount = document.getElementById('validationErrorCount');
+    elements.validationEmpty = document.getElementById('validationEmpty');
+    elements.validationList = document.getElementById('validationList');
     elements.copyClipboard = document.getElementById('copyClipboard');
   }
 
@@ -159,6 +166,7 @@
     renderLogs();
     renderPreview();
     renderStats();
+    renderValidation();
     log(`Session started in ${modeLabel(state.mode)} mode targeting ${state.total} page${state.total === 1 ? '' : 's'}.`);
     processQueue();
   }
@@ -225,6 +233,17 @@
       renderPreview();
       renderStats();
       updateExports();
+      renderValidation();
+      if (result.validation?.summary) {
+        const { summary } = result.validation;
+        const validationSeverity = summary.status === 'error' ? 'error' : summary.status === 'warning' ? 'warning' : 'success';
+        log(
+          `Validation for ${result.title}: ${summary.counts?.pass ?? 0} pass, ${summary.counts?.warning ?? 0} warning${
+            (summary.counts?.warning ?? 0) === 1 ? '' : 's'
+          }, ${summary.counts?.error ?? 0} error${(summary.counts?.error ?? 0) === 1 ? '' : 's'}.`,
+          validationSeverity
+        );
+      }
       log(`Captured ${result.sections.length} section${result.sections.length === 1 ? '' : 's'} from ${result.title}.`, 'success');
     } catch (error) {
       state.processed += 1;
@@ -275,6 +294,7 @@
     const inlineCitations = state.options.citations ? collectInlineCitations(main) : [];
     const tooltips = state.options.tooltips ? collectTooltips(main) : [];
     const footnotes = state.options.footnotes ? collectFootnotes(doc) : [];
+    const validation = validatePage(inlineCitations, tooltips, footnotes, state.options);
 
     const wordCount = main.textContent
       .replace(/\s+/g, ' ')
@@ -290,6 +310,7 @@
       inlineCitations,
       tooltips,
       footnotes,
+      validation,
       stats: {
         sections: sections.length,
         citations: inlineCitations.length,
@@ -367,10 +388,19 @@
         if (!text) {
           return null;
         }
+        const tooltipId = (anchor.getAttribute('aria-describedby') || node.getAttribute('aria-describedby') || '').trim();
+        const tooltipText =
+          anchor.getAttribute('data-tooltip') ||
+          anchor.getAttribute('title') ||
+          node.getAttribute('data-tooltip') ||
+          node.getAttribute('title') ||
+          '';
         return {
           id: anchor.id || node.id || `citation-${index + 1}`,
           text,
           href,
+          tooltipId,
+          tooltipText: tooltipText.trim(),
           context: node.closest('p, li')?.textContent?.trim().slice(0, 240) || ''
         };
       })
@@ -435,6 +465,269 @@
     });
 
     return unique;
+  }
+
+  function validatePage(inlineCitations, tooltips, footnotes, options = {}) {
+    const counts = { pass: 0, warning: 0, error: 0 };
+    const items = [];
+    const captureCitations = options.citations !== false;
+    const captureTooltips = options.tooltips !== false;
+    const captureFootnotes = options.footnotes !== false;
+    const limitations = [];
+
+    if (!captureCitations) {
+      limitations.push('Inline citation capture disabled; validation is limited to available references.');
+    }
+    if (!captureFootnotes) {
+      limitations.push('Footnote capture disabled; citation-to-footnote checks skipped.');
+    }
+    if (!captureTooltips) {
+      limitations.push('Tooltip capture disabled; citation tooltip checks skipped.');
+    }
+
+    const record = (entry) => {
+      const severity = entry.severity || 'pass';
+      if (counts[severity] !== undefined) {
+        counts[severity] += 1;
+      }
+      items.push(entry);
+    };
+
+    const createKeyVariants = (value) => {
+      if (!value) return [];
+      const raw = value.toString().replace(/^#+/, '').trim();
+      if (!raw) return [];
+      const lower = raw.toLowerCase();
+      const dashed = lower.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      const compact = lower.replace(/[^a-z0-9]+/g, '');
+      return Array.from(new Set([lower, dashed, compact])).filter(Boolean);
+    };
+
+    const collectKeys = (values) => {
+      const set = new Set();
+      values.forEach((value) => {
+        createKeyVariants(value).forEach((key) => set.add(key));
+      });
+      return Array.from(set);
+    };
+
+    const extractAnchorTarget = (href) => {
+      if (!href) return '';
+      try {
+        const url = new URL(href, 'https://example.com');
+        return url.hash ? url.hash.replace(/^#/, '') : url.href;
+      } catch (error) {
+        const index = href.indexOf('#');
+        return index >= 0 ? href.slice(index + 1) : href;
+      }
+    };
+
+    const footnoteMap = new Map();
+    if (captureFootnotes) {
+      footnotes.forEach((footnote) => {
+        collectKeys([footnote.id]).forEach((key) => {
+          if (!footnoteMap.has(key)) {
+            footnoteMap.set(key, footnote);
+          }
+        });
+      });
+    }
+
+    const tooltipMap = new Map();
+    const tooltipTextMap = new Map();
+    if (captureTooltips) {
+      tooltips.forEach((tooltip) => {
+        collectKeys([tooltip.id]).forEach((key) => {
+          if (!tooltipMap.has(key)) {
+            tooltipMap.set(key, tooltip);
+          }
+        });
+        if (tooltip.text) {
+          const textKey = tooltip.text.trim().toLowerCase();
+          if (!tooltipTextMap.has(textKey)) {
+            tooltipTextMap.set(textKey, tooltip);
+          }
+        }
+      });
+    }
+
+    const referencedFootnotes = new Set();
+    const referencedTooltipIds = new Set();
+    const referencedTooltipTexts = new Set();
+
+    inlineCitations.forEach((citation) => {
+      const footnoteTarget = extractAnchorTarget(citation.href);
+      const footnoteKeys = collectKeys([footnoteTarget, citation.id]);
+      let footnote = null;
+      let matchedFootnoteKey = '';
+      if (captureFootnotes) {
+        for (const key of footnoteKeys) {
+          if (footnoteMap.has(key)) {
+            footnote = footnoteMap.get(key);
+            matchedFootnoteKey = key;
+            referencedFootnotes.add(key);
+            break;
+          }
+        }
+      }
+
+      const expectedTooltip = Boolean(citation.tooltipId || citation.tooltipText);
+      const tooltipKeys = collectKeys([citation.tooltipId]);
+      let tooltip = null;
+      if (captureTooltips) {
+        for (const key of tooltipKeys) {
+          if (tooltipMap.has(key)) {
+            tooltip = tooltipMap.get(key);
+            collectKeys([tooltip.id]).forEach((variant) => referencedTooltipIds.add(variant));
+            if (tooltip.text) {
+              referencedTooltipTexts.add(tooltip.text.trim().toLowerCase());
+            }
+            break;
+          }
+        }
+
+        if (!tooltip && citation.tooltipText) {
+          const textKey = citation.tooltipText.trim().toLowerCase();
+          if (tooltipTextMap.has(textKey)) {
+            tooltip = tooltipTextMap.get(textKey);
+            if (tooltip.id) {
+              collectKeys([tooltip.id]).forEach((variant) => referencedTooltipIds.add(variant));
+            }
+            referencedTooltipTexts.add(textKey);
+          }
+        }
+      }
+
+      let severity = 'pass';
+      const detailParts = [];
+
+      if (captureFootnotes) {
+        if (footnote) {
+          detailParts.push(`linked to footnote ${footnote.id}`);
+        } else if (footnoteKeys.length > 0) {
+          severity = 'error';
+          detailParts.push(`missing footnote target "${footnoteKeys[0]}"`);
+        } else if (footnotes.length > 0) {
+          severity = 'warning';
+          detailParts.push('no footnote reference detected');
+        } else {
+          severity = 'warning';
+          detailParts.push('no footnote reference available');
+        }
+      } else if (footnoteKeys.length > 0) {
+        severity = 'warning';
+        detailParts.push('footnote validation skipped (capture disabled)');
+      }
+
+      if (expectedTooltip && captureTooltips) {
+        if (tooltip) {
+          const tooltipLabel = tooltip.id ? `tooltip ${tooltip.id}` : 'tooltip content';
+          detailParts.push(`${tooltipLabel} found`);
+        } else {
+          if (severity !== 'error') {
+            severity = 'warning';
+          }
+          detailParts.push('tooltip reference missing');
+        }
+      } else if (expectedTooltip && !captureTooltips) {
+        if (severity !== 'error') {
+          severity = 'warning';
+        }
+        detailParts.push('tooltip validation skipped (capture disabled)');
+      } else if (captureTooltips && tooltips.length === 0 && severity === 'pass') {
+        detailParts.push('no tooltip reference available');
+      }
+
+      const messageDetails = detailParts.length ? ` — ${detailParts.join('; ')}` : '';
+
+      record({
+        severity,
+        scope: 'citation',
+        message: `Citation ${citation.text}${messageDetails}`,
+        details: {
+          citationId: citation.id,
+          citationText: citation.text,
+          footnoteId: footnote?.id || '',
+          footnoteTarget,
+          tooltipId: tooltip?.id || citation.tooltipId || '',
+          tooltipText: citation.tooltipText || tooltip?.text || '',
+          href: citation.href,
+          context: citation.context || ''
+        }
+      });
+    });
+
+    if (captureFootnotes) {
+      footnotes.forEach((footnote) => {
+        const keys = collectKeys([footnote.id]);
+        const hasReference = keys.some((key) => referencedFootnotes.has(key));
+        if (!hasReference) {
+          record({
+            severity: inlineCitations.length === 0 ? 'error' : 'warning',
+            scope: 'footnote',
+            message: `Footnote ${footnote.id} is not referenced by any inline citation.`,
+            details: {
+              footnoteId: footnote.id,
+              text: footnote.text
+            }
+          });
+        }
+      });
+    }
+
+    if (captureTooltips) {
+      tooltips.forEach((tooltip) => {
+        const idKeys = collectKeys([tooltip.id]);
+        const textKey = tooltip.text?.trim().toLowerCase() || '';
+        const hasReference =
+          idKeys.some((key) => referencedTooltipIds.has(key)) ||
+          (textKey && referencedTooltipTexts.has(textKey));
+        if (!hasReference) {
+          record({
+            severity: 'warning',
+            scope: 'tooltip',
+            message: `Tooltip ${tooltip.id || tooltip.text.slice(0, 40)} is not associated with any citation.`,
+            details: {
+              tooltipId: tooltip.id,
+              tooltipText: tooltip.text
+            }
+          });
+        }
+      });
+    }
+
+    limitations.forEach((message) => {
+      record({
+        severity: 'warning',
+        scope: 'validation',
+        message,
+        details: {}
+      });
+    });
+
+    if (items.length === 0) {
+      record({
+        severity: 'pass',
+        scope: 'page',
+        message: 'No citation validation issues detected.',
+        details: {}
+      });
+    }
+
+    const status = counts.error > 0 ? 'error' : counts.warning > 0 ? 'warning' : 'pass';
+
+    return {
+      items,
+      summary: {
+        status,
+        counts,
+        totals: {
+          citations: inlineCitations.length,
+          footnotes: footnotes.length,
+          tooltips: tooltips.length
+        }
+      }
+    };
   }
 
   function switchTab(tabName) {
@@ -566,6 +859,148 @@
     elements.statWords.textContent = totals.words.toLocaleString();
   }
 
+  function renderValidation() {
+    if (!elements.validationList) return;
+
+    const counts = { pass: 0, warning: 0, error: 0 };
+    let status = state.results.length === 0 ? 'idle' : 'pass';
+    const aggregated = [];
+
+    state.results.forEach((result) => {
+      if (!result.validation) {
+        return;
+      }
+      const summary = result.validation.summary || { counts: {} };
+      counts.pass += summary.counts?.pass || 0;
+      counts.warning += summary.counts?.warning || 0;
+      counts.error += summary.counts?.error || 0;
+      aggregated.push(
+        ...result.validation.items.map((item) => ({
+          ...item,
+          pageTitle: result.title,
+          pageUrl: result.url
+        }))
+      );
+      if (summary.status === 'error') {
+        status = 'error';
+      } else if (summary.status === 'warning' && status !== 'error') {
+        status = 'warning';
+      } else if (status === 'idle' && summary.status === 'pass') {
+        status = 'pass';
+      }
+    });
+
+    if (elements.validationPassCount) {
+      elements.validationPassCount.textContent = counts.pass;
+    }
+    if (elements.validationWarnCount) {
+      elements.validationWarnCount.textContent = counts.warning;
+    }
+    if (elements.validationErrorCount) {
+      elements.validationErrorCount.textContent = counts.error;
+    }
+
+    if (elements.validationStatus) {
+      elements.validationStatus.classList.remove('pass', 'warning', 'error');
+      let label = 'Awaiting results';
+      if (status === 'error') {
+        label = 'Errors detected';
+        elements.validationStatus.classList.add('error');
+      } else if (status === 'warning') {
+        label = 'Warnings detected';
+        elements.validationStatus.classList.add('warning');
+      } else if (status === 'pass' && state.results.length > 0) {
+        label = 'All checks passed';
+        elements.validationStatus.classList.add('pass');
+      }
+      elements.validationStatus.textContent = label;
+    }
+
+    const severityOrder = { error: 0, warning: 1, pass: 2 };
+    aggregated.sort((a, b) => {
+      const orderA = severityOrder[a.severity] ?? 3;
+      const orderB = severityOrder[b.severity] ?? 3;
+      if (orderA !== orderB) return orderA - orderB;
+      const titleCompare = (a.pageTitle || '').localeCompare(b.pageTitle || '');
+      if (titleCompare !== 0) return titleCompare;
+      return (a.message || '').localeCompare(b.message || '');
+    });
+
+    if (!aggregated.length) {
+      if (elements.validationEmpty) {
+        elements.validationEmpty.hidden = false;
+      }
+      elements.validationList.hidden = true;
+      elements.validationList.innerHTML = '';
+      return;
+    }
+
+    if (elements.validationEmpty) {
+      elements.validationEmpty.hidden = true;
+    }
+    elements.validationList.hidden = false;
+
+    elements.validationList.innerHTML = aggregated
+      .map((item) => {
+        const detailLines = [];
+        if (item.details) {
+          const { citationText, citationId, footnoteId, footnoteTarget, tooltipId, tooltipText, href } = item.details;
+          if (citationText) {
+            detailLines.push(`Citation text: ${citationText}`);
+          }
+          if (citationId) {
+            detailLines.push(`Citation id: ${citationId}`);
+          }
+          if (footnoteId) {
+            detailLines.push(`Footnote id: ${footnoteId}`);
+          }
+          if (footnoteTarget && footnoteTarget !== footnoteId) {
+            detailLines.push(`Footnote target: ${footnoteTarget}`);
+          }
+          if (tooltipId) {
+            detailLines.push(`Tooltip ref: ${tooltipId}`);
+          } else if (tooltipText && item.scope === 'citation') {
+            detailLines.push(`Tooltip text: ${tooltipText}`);
+          }
+          if (href) {
+            detailLines.push(`Href: ${href}`);
+          }
+        }
+
+        const detailHtml = detailLines.length
+          ? `<div class="validation-details">${detailLines
+              .map((line) => `<span>${escapeHtml(line)}</span>`)
+              .join('')}</div>`
+          : '';
+
+        const metaParts = [];
+        if (item.pageTitle) {
+          metaParts.push(`<span>${escapeHtml(item.pageTitle)}</span>`);
+        }
+        if (item.pageUrl) {
+          metaParts.push(
+            `<a href="${item.pageUrl}" target="_blank" rel="noopener">${escapeHtml(item.pageUrl)}</a>`
+          );
+        }
+
+        const metaHtml = metaParts.length
+          ? `<div class="validation-meta">${metaParts.join('<span aria-hidden="true" class="meta-separator">•</span>')}</div>`
+          : '';
+
+        return `
+          <li class="validation-item ${item.severity}">
+            <div class="validation-item-header">
+              <span class="validation-badge">${escapeHtml(item.severity || '').toUpperCase()}</span>
+              <span class="validation-message">${escapeHtml(item.message)}</span>
+            </div>
+            ${metaHtml}
+            ${detailHtml}
+          </li>
+        `;
+      })
+      .join('');
+  }
+
   function renderLogs() {
     elements.logList.innerHTML = state.logs
       .slice(-120)
@@ -644,6 +1079,21 @@
         });
         lines.push('');
       }
+      if (result.validation) {
+        const summary = result.validation.summary || { status: 'pass', counts: {} };
+        lines.push('#### Validation');
+        lines.push(
+          `- Status: ${summary.status ? summary.status.toUpperCase() : 'PASS'} (pass: ${summary.counts?.pass ?? 0}, warnings: ${
+            summary.counts?.warning ?? 0
+          }, errors: ${summary.counts?.error ?? 0})`
+        );
+        if (Array.isArray(result.validation.items) && result.validation.items.length) {
+          result.validation.items.forEach((item) => {
+            lines.push(`  - [${(item.severity || 'pass').toUpperCase()}] ${item.message}`);
+          });
+        }
+        lines.push('');
+      }
     });
     return lines.join('\n');
   }
@@ -676,6 +1126,29 @@
               .join('')}</ul></section>`
           : '';
 
+        const validationSummary = result.validation?.summary || { status: 'pass', counts: {} };
+        const validationItems = Array.isArray(result.validation?.items) ? result.validation.items : [];
+        const validationList = validationItems
+          .map(
+            (item) =>
+              `<li class="${item.severity}"><strong>${escapeHtml(
+                (item.severity || 'pass').toUpperCase()
+              )}:</strong> ${escapeHtml(item.message)}</li>`
+          )
+          .join('');
+
+        const validationHtml = result.validation
+          ? `<section class="validation"><h4>Validation</h4><p class="validation-status ${validationSummary.status || 'pass'}">Status: ${
+              (validationSummary.status || 'pass').toUpperCase()
+            } (pass: ${validationSummary.counts?.pass ?? 0}, warnings: ${validationSummary.counts?.warning ?? 0}, errors: ${
+              validationSummary.counts?.error ?? 0
+            })</p>${
+              validationList
+                ? `<ul>${validationList}</ul>`
+                : '<p class="validation-note">No individual validation items recorded.</p>'
+            }</section>`
+          : '';
+
         return `
         <article class="page-result">
           <header>
@@ -685,6 +1158,7 @@
           ${sectionsHtml}
           ${citationsHtml}
           ${footnotesHtml}
+          ${validationHtml}
         </article>`;
       })
       .join('\n');
@@ -700,6 +1174,17 @@ h1, h2, h3, h4 { font-weight: 600; }
 .page-result { margin-bottom: 3rem; border-bottom: 1px solid #cbd5f5; padding-bottom: 2rem; }
 .page-result header h2 { margin-bottom: 0.25rem; }
 .citations ul, .footnotes ul { padding-left: 1.2rem; }
+.validation { margin-top: 1.5rem; padding: 1rem; background: #f8fafc; border-radius: 0.75rem; border: 1px solid #e2e8f0; }
+.validation h4 { margin-top: 0; }
+.validation-status { font-weight: 600; margin-bottom: 0.75rem; }
+.validation-status.pass { color: #15803d; }
+.validation-status.warning { color: #b45309; }
+.validation-status.error { color: #b91c1c; }
+.validation ul { list-style: none; padding-left: 0; margin: 0; display: grid; gap: 0.35rem; }
+.validation li.pass { color: #166534; }
+.validation li.warning { color: #b45309; }
+.validation li.error { color: #b91c1c; }
+.validation-note { margin: 0; color: #475569; font-size: 0.9rem; }
 </style>
 </head>
 <body>
@@ -734,7 +1219,13 @@ ${sections}
     if (state.results.length === 0) return;
     const summary = state.results
       .map(
-        (result) => `${result.title} — ${result.url}\nSections: ${result.stats.sections}, Citations: ${result.stats.citations}, Footnotes: ${result.stats.footnotes}`
+        (result) => {
+          const validationSummary = result.validation?.summary;
+          const validationLine = validationSummary
+            ? `Validation: ${(validationSummary.status || 'pass').toUpperCase()} (Pass: ${validationSummary.counts?.pass ?? 0}, Warnings: ${validationSummary.counts?.warning ?? 0}, Errors: ${validationSummary.counts?.error ?? 0})`
+            : 'Validation: N/A';
+          return `${result.title} — ${result.url}\nSections: ${result.stats.sections}, Citations: ${result.stats.citations}, Footnotes: ${result.stats.footnotes}\n${validationLine}`;
+        }
       )
       .join('\n\n');
 
