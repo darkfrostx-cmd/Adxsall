@@ -8,6 +8,8 @@ const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const ROOT_DIR = process.cwd();
 const OUTPUT_FILE = path.join(ROOT_DIR, 'context-dump.md');
+const INCLUDE_LOGS = process.env.DUMP_CONTEXT_INCLUDE_LOGS !== 'false';
+
 const EXCLUDED_DIRECTORIES = new Set([
   '.git',
   'node_modules',
@@ -17,9 +19,12 @@ const EXCLUDED_DIRECTORIES = new Set([
   'out',
   '.cache',
   'coverage',
-  'tmp',
-  'logs'
+  'tmp'
 ]);
+
+if (!INCLUDE_LOGS) {
+  EXCLUDED_DIRECTORIES.add('logs');
+}
 const EXCLUDED_FILES = new Set([
   path.basename(OUTPUT_FILE)
 ]);
