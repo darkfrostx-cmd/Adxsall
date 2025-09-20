@@ -1,7 +1,10 @@
 (() => {
+  const DEFAULT_BASE_URL = 'https://www.adxs.org';
+
   const state = {
     mode: 'single',
-    baseUrl: 'https://www.adxs.org',
+    baseUrl: DEFAULT_BASE_URL,
+    language: 'en',
     options: {
       citations: true,
       tooltips: true,
@@ -13,37 +16,65 @@
     processed: 0,
     total: 0,
     results: [],
-    logs: []
+    logs: [],
+    documents: [],
+    selectedSections: new Map(),
+    siteStructure: [],
+    structureLoading: false,
+    structureError: null,
+    selectedStructureUrls: new Set(),
+    structureOpenGroups: new Set(),
+    structureOrigin: '',
+    structureLanguage: 'en',
+    toastTimer: null
   };
 
   const elements = {};
+  let structureRefreshTimer = null;
 
   document.addEventListener('DOMContentLoaded', () => {
     cacheElements();
     attachEventListeners();
+    setMode(state.mode);
+    updateBuilderUrl();
     updateProgress();
     updateExports();
     renderPreview();
     renderStats();
     renderValidation();
     renderLogs();
+    renderDocumentBuilder();
+    renderDocuments();
+    updateProxyWarning();
+    renderStructurePanel();
+    loadSiteStructure();
   });
 
   function cacheElements() {
     elements.baseUrl = document.getElementById('baseUrl');
     elements.paths = document.getElementById('paths');
-    elements.modeButtons = Array.from(document.querySelectorAll('.mode-button'));
+    elements.pathsField = document.getElementById('pathsField');
+    elements.modeSelect = document.getElementById('scrapingMode');
     elements.startBtn = document.getElementById('startBtn');
     elements.pauseBtn = document.getElementById('pauseBtn');
     elements.stopBtn = document.getElementById('stopBtn');
+    elements.testConnectionBtn = document.getElementById('testConnectionBtn');
     elements.includeCitations = document.getElementById('includeCitations');
     elements.includeTooltips = document.getElementById('includeTooltips');
     elements.includeFootnotes = document.getElementById('includeFootnotes');
-    elements.progressBar = document.getElementById('progressBar');
+    elements.languageSelect = document.getElementById('languageSelect');
+    elements.pathInput = document.getElementById('pathInput');
+    elements.fullUrl = document.getElementById('fullUrl');
+    elements.applyUrlBtn = document.getElementById('applyUrlBtn');
+    elements.quickUrlButtons = Array.from(document.querySelectorAll('.quick-url'));
+    elements.progressContainer = document.getElementById('progressContainer');
+    elements.progressFill = document.getElementById('progressFill');
     elements.progressText = document.getElementById('progressText');
-    elements.batchCounter = document.getElementById('batchCounter');
-    elements.previewEmpty = document.getElementById('previewEmpty');
-    elements.previewContent = document.getElementById('previewContent');
+    elements.batchProgress = document.getElementById('batchProgress');
+    elements.batchList = document.getElementById('batchList');
+    elements.pagesScraped = document.getElementById('pagesScraped');
+    elements.citationsFound = document.getElementById('citationsFound');
+    elements.sectionsFound = document.getElementById('sectionsFound');
     elements.statPages = document.getElementById('statPages');
     elements.statSections = document.getElementById('statSections');
     elements.statCitations = document.getElementById('statCitations');
@@ -51,10 +82,16 @@
     elements.statFootnotes = document.getElementById('statFootnotes');
     elements.statWords = document.getElementById('statWords');
     elements.logList = document.getElementById('logList');
-    elements.statusPill = document.getElementById('statusPill');
-    elements.tabButtons = Array.from(document.querySelectorAll('.tab'));
-    elements.tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
+    elements.statusIndicator = document.getElementById('statusIndicator');
+    elements.previewTabs = Array.from(document.querySelectorAll('.preview-tab'));
+    elements.previewPanes = Array.from(document.querySelectorAll('.preview-pane'));
     elements.exportButtons = Array.from(document.querySelectorAll('.export[data-export]'));
+    elements.contentPreview = document.getElementById('contentPreview');
+    elements.citationsPreview = document.getElementById('citationsPreview');
+    elements.structurePreview = document.getElementById('structurePreview');
+    elements.documentsPreview = document.getElementById('documentsPreview');
+    elements.rawOutput = document.getElementById('rawDataOutput');
+    elements.toast = document.getElementById('toast');
     elements.validationStatus = document.getElementById('validationStatus');
     elements.validationPassCount = document.getElementById('validationPassCount');
     elements.validationWarnCount = document.getElementById('validationWarnCount');
@@ -62,14 +99,147 @@
     elements.validationEmpty = document.getElementById('validationEmpty');
     elements.validationList = document.getElementById('validationList');
     elements.copyClipboard = document.getElementById('copyClipboard');
+    elements.proxyWarning = document.getElementById('proxyWarning');
+    elements.documentBuilder = document.getElementById('documentBuilder');
+    elements.documentActions = document.getElementById('documentActions');
+    elements.documentName = document.getElementById('documentName');
+    elements.createDocumentBtn = document.getElementById('createDocumentBtn');
+    elements.clearSelectionBtn = document.getElementById('clearSelectionBtn');
+    elements.documentsEmpty = document.getElementById('documentsEmpty');
+    elements.documentList = document.getElementById('documentList');
+    elements.structureActions = document.getElementById('structureActions');
+    elements.structureTree = document.getElementById('structureTree');
+    elements.structureSummaryLabel = document.getElementById('structureSummaryLabel');
+    elements.structureChips = document.getElementById('structureChips');
+    elements.structureStatus = document.getElementById('structureStatus');
+  }
+
+  function computeBuilderTarget() {
+    const selectedLanguage = (elements.languageSelect?.value || state.language || 'en').trim().toLowerCase();
+    const language = selectedLanguage === 'de' ? 'de' : 'en';
+    const rawHost = elements.baseUrl?.value?.trim();
+    let origin = DEFAULT_BASE_URL;
+    if (rawHost) {
+      try {
+        origin = extractOrigin(rawHost) || origin;
+      } catch (error) {
+        origin = DEFAULT_BASE_URL;
+      }
+    }
+    const rawPath = elements.pathInput?.value || '';
+    const cleanedPath = rawPath.replace(/^[\s/]+/, '').trim().replace(/\s+/g, ' ');
+    const base = `${origin.replace(/\/$/, '')}/${language}`;
+    const full = cleanedPath ? `${base}/${cleanedPath}` : `${base}/`;
+    return { language, path: cleanedPath, base, full };
+  }
+
+  function updateBuilderUrl() {
+    const target = computeBuilderTarget();
+    if (elements.fullUrl) {
+      elements.fullUrl.textContent = target.full;
+    }
+  }
+
+  function applyBuilderUrl(options = {}) {
+    const { append = true } = options;
+    const target = computeBuilderTarget();
+    if (elements.languageSelect && elements.languageSelect.value !== target.language) {
+      elements.languageSelect.value = target.language;
+    }
+    if (elements.baseUrl) {
+      elements.baseUrl.value = target.base;
+    }
+    if (elements.paths) {
+      const existing = new Set(
+        (elements.paths.value || '')
+          .split(/\n+/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+      );
+      if (!append) {
+        existing.clear();
+      }
+      if (target.path) {
+        existing.add(target.path);
+      } else if (!append) {
+        existing.clear();
+      }
+      elements.paths.value = Array.from(existing).join('\n');
+    }
+    updateBuilderUrl();
+    scheduleStructureRefresh();
+    const label = target.path ? `/${target.path}` : 'homepage';
+    log(`Prepared ${label} for scraping.`, 'info');
+  }
+
+  function setQuickUrl(path) {
+    if (elements.pathInput) {
+      elements.pathInput.value = (path || '').replace(/^\/+/, '');
+    }
+    updateBuilderUrl();
+    applyBuilderUrl({ append: true });
+  }
+
+  async function testConnection() {
+    if (!ensureHttpContext()) {
+      return;
+    }
+    const target = computeBuilderTarget();
+    updateStatus('active', 'Testing connection');
+    try {
+      const response = await fetch(buildProxyUrl(target.full), {
+        method: 'GET',
+        headers: { Accept: 'text/html,application/xhtml+xml' }
+      });
+      if (!response.ok) {
+        throw new Error(`${response.status} ${response.statusText}`);
+      }
+      showToast('Proxy connection successful.', 'success');
+      log(`Proxy connection successful for ${target.full}.`, 'success');
+      updateStatus(state.isRunning ? 'active' : 'idle', state.isRunning ? 'Running' : 'Ready to Scrape');
+    } catch (error) {
+      showToast(`Connection failed: ${error.message}`, 'error');
+      log(`Connection test failed: ${error.message}`, 'error');
+      updateStatus('error', 'Connection failed');
+      setTimeout(() => {
+        updateStatus(state.isRunning ? 'active' : 'idle', state.isRunning ? 'Running' : 'Ready to Scrape');
+      }, 2400);
+    }
   }
 
   function attachEventListeners() {
-    elements.modeButtons.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        setMode(btn.dataset.mode);
+    if (elements.modeSelect) {
+      elements.modeSelect.addEventListener('change', () => {
+        setMode(elements.modeSelect.value);
       });
-    });
+    }
+
+    if (elements.baseUrl) {
+      ['change', 'blur'].forEach((eventName) => {
+        elements.baseUrl.addEventListener(eventName, scheduleStructureRefresh);
+      });
+    }
+
+    if (elements.languageSelect) {
+      elements.languageSelect.addEventListener('change', updateBuilderUrl);
+    }
+    if (elements.pathInput) {
+      elements.pathInput.addEventListener('input', updateBuilderUrl);
+    }
+    if (elements.applyUrlBtn) {
+      elements.applyUrlBtn.addEventListener('click', () => applyBuilderUrl({ append: false }));
+    }
+    if (elements.quickUrlButtons?.length) {
+      elements.quickUrlButtons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          setQuickUrl(btn.dataset.path || '');
+        });
+      });
+    }
+
+    if (elements.testConnectionBtn) {
+      elements.testConnectionBtn.addEventListener('click', testConnection);
+    }
 
     elements.includeCitations.addEventListener('change', () => {
       state.options.citations = elements.includeCitations.checked;
@@ -90,24 +260,702 @@
     elements.pauseBtn.addEventListener('click', togglePause);
     elements.stopBtn.addEventListener('click', stopScrape);
 
-    elements.tabButtons.forEach((tab) => {
-      tab.addEventListener('click', () => switchTab(tab.dataset.tab));
-    });
+    if (elements.previewTabs?.length) {
+      elements.previewTabs.forEach((tab) => {
+        tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+      });
+    }
 
     elements.exportButtons.forEach((btn) => {
       btn.addEventListener('click', () => handleExport(btn.dataset.export));
     });
 
     elements.copyClipboard.addEventListener('click', copySummaryToClipboard);
+
+    if (elements.structureActions) {
+      elements.structureActions.addEventListener('click', handleStructureAction);
+    }
+    if (elements.structureTree) {
+      elements.structureTree.addEventListener('change', handleStructureTreeChange);
+      elements.structureTree.addEventListener('click', handleStructureTreeClick);
+      elements.structureTree.addEventListener('toggle', handleStructureGroupToggle, true);
+    }
+
+    if (elements.documentBuilder) {
+      elements.documentBuilder.addEventListener('change', handleDocumentSelectionChange);
+    }
+    if (elements.createDocumentBtn) {
+      elements.createDocumentBtn.addEventListener('click', createDocumentFromSelection);
+    }
+    if (elements.clearSelectionBtn) {
+      elements.clearSelectionBtn.addEventListener('click', clearSelectedSections);
+    }
+    if (elements.documentList) {
+      elements.documentList.addEventListener('click', handleDocumentListClick);
+    }
+  }
+
+  function scheduleStructureRefresh() {
+    if (structureRefreshTimer) {
+      clearTimeout(structureRefreshTimer);
+    }
+    structureRefreshTimer = setTimeout(() => {
+      loadSiteStructure({ silent: true });
+    }, 600);
+  }
+
+  async function loadSiteStructure(options = {}) {
+    const { silent = false, force = false } = options;
+    let baseValue = elements.baseUrl?.value?.trim() || state.baseUrl || DEFAULT_BASE_URL;
+    if (!baseValue) {
+      baseValue = DEFAULT_BASE_URL;
+    }
+    const origin = extractOrigin(baseValue);
+    const language = deriveLanguageSegment(baseValue);
+
+    if (!force && state.structureOrigin === origin && state.structureLanguage === language && state.siteStructure.length > 0) {
+      if (!silent) {
+        renderStructurePanel();
+      }
+      return;
+    }
+
+    state.structureLoading = true;
+    state.structureError = null;
+    renderStructurePanel();
+
+    try {
+      const sitemapUrl = buildSitemapUrl(origin, language);
+      const response = await fetch(buildProxyUrl(sitemapUrl), {
+        method: 'GET',
+        headers: { Accept: 'text/html,application/xhtml+xml' }
+      });
+      if (!response.ok) {
+        throw new Error(`${response.status} ${response.statusText}`);
+      }
+      const html = await response.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const groups = parseSitemapDocument(doc, origin);
+
+      state.siteStructure = groups;
+      state.structureOrigin = origin;
+      state.structureLanguage = language;
+      state.structureOpenGroups = new Set(groups.map((group) => group.key));
+
+      const availableUrls = new Set();
+      groups.forEach((group) => collectGroupUrls(group, availableUrls));
+
+      if (state.selectedStructureUrls.size > 0) {
+        const filtered = Array.from(state.selectedStructureUrls).filter((url) => availableUrls.has(url));
+        const removed = state.selectedStructureUrls.size - filtered.length;
+        state.selectedStructureUrls = new Set(filtered);
+        if (removed > 0 && !silent) {
+          log(
+            `${removed} sitemap selection${removed === 1 ? '' : 's'} were removed because they are not present in the current sitemap.`,
+            'warning'
+          );
+        }
+      }
+
+      if (!silent) {
+        log(
+          `Loaded sitemap (${language.toUpperCase()}) with ${availableUrls.size} section${availableUrls.size === 1 ? '' : 's'}.`,
+          'success'
+        );
+      }
+    } catch (error) {
+      const message =
+        error.message && error.message.includes('Local helper server unavailable')
+          ? 'Run npm run dev and open the app via http://localhost:3000 to load the sitemap.'
+          : `Unable to load sitemap: ${error.message}`;
+      state.structureError = message;
+      if (!silent) {
+        log(message, 'error');
+      }
+    } finally {
+      state.structureLoading = false;
+      renderStructurePanel();
+    }
+  }
+
+  function deriveLanguageSegment(urlValue) {
+    try {
+      const parsed = new URL(urlValue);
+      const parts = parsed.pathname.split('/').filter(Boolean);
+      if (parts.length > 0) {
+        const candidate = parts[0].toLowerCase();
+        if (/^[a-z]{2}$/.test(candidate)) {
+          return candidate;
+        }
+      }
+    } catch (error) {
+      // fall back to default language
+    }
+    return 'en';
+  }
+
+  function extractOrigin(urlValue) {
+    try {
+      const parsed = new URL(urlValue);
+      return parsed.origin;
+    } catch (error) {
+      return new URL(DEFAULT_BASE_URL).origin;
+    }
+  }
+
+  function buildSitemapUrl(origin, language) {
+    const lang = language && language.length ? language : 'en';
+    return new URL(`/${lang}/sitemap`, origin).toString();
+  }
+
+  function parseSitemapDocument(doc, origin) {
+    const main = doc.querySelector('main') || doc.body;
+    if (!main) {
+      return [];
+    }
+    const headings = Array.from(main.querySelectorAll('h2'));
+    const groups = [];
+    headings.forEach((heading, index) => {
+      const list = findNextListSibling(heading);
+      if (!list) {
+        return;
+      }
+      const title = normaliseWhitespace(heading.textContent || '').trim();
+      if (!title) {
+        return;
+      }
+      const items = parseSitemapList(list, origin);
+      if (items.length === 0) {
+        return;
+      }
+      groups.push({
+        title,
+        key: createGroupKey(title, index),
+        items
+      });
+    });
+    return groups;
+  }
+
+  function findNextListSibling(heading) {
+    let sibling = heading.nextElementSibling;
+    while (sibling) {
+      if (sibling.tagName === 'UL' || sibling.tagName === 'OL') {
+        return sibling;
+      }
+      sibling = sibling.nextElementSibling;
+    }
+    return null;
+  }
+
+  function parseSitemapList(list, origin) {
+    const items = [];
+    Array.from(list.children).forEach((child) => {
+      if (!(child instanceof HTMLElement) || child.tagName !== 'LI') {
+        return;
+      }
+      const anchor =
+        child.querySelector(':scope > a') ||
+        child.querySelector(':scope > div > a') ||
+        child.querySelector(':scope > span > a') ||
+        child.querySelector('a');
+      if (!anchor) {
+        return;
+      }
+      const title = normaliseWhitespace(anchor.textContent || '').trim();
+      if (!title) {
+        return;
+      }
+      const href = anchor.getAttribute('href') || '';
+      const absoluteUrl = safeBuildAbsoluteUrl(href, origin);
+      const path = extractPathFromUrl(absoluteUrl);
+      const nestedList = Array.from(child.children).find(
+        (node) => node instanceof HTMLElement && (node.tagName === 'UL' || node.tagName === 'OL')
+      );
+      const children = nestedList ? parseSitemapList(nestedList, origin) : [];
+      items.push({
+        title,
+        url: absoluteUrl,
+        path,
+        children
+      });
+    });
+    return items;
+  }
+
+  function safeBuildAbsoluteUrl(href, origin) {
+    try {
+      return new URL(href, origin).toString();
+    } catch (error) {
+      try {
+        return new URL(href, DEFAULT_BASE_URL).toString();
+      } catch (innerError) {
+        return href;
+      }
+    }
+  }
+
+  function extractPathFromUrl(urlValue) {
+    try {
+      const parsed = new URL(urlValue);
+      return `${parsed.pathname}${parsed.search || ''}`;
+    } catch (error) {
+      return urlValue;
+    }
+  }
+
+  function createGroupKey(title, index) {
+    const slug = title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+    return `${slug || 'group'}-${index}`;
+  }
+
+  function renderStructurePanel() {
+    if (!elements.structureTree) {
+      return;
+    }
+
+    const summary = computeStructureSummary();
+
+    if (elements.structureSummaryLabel) {
+      let label;
+      if (state.structureLoading) {
+        label = 'Loading sitemap…';
+      } else if (state.structureError) {
+        label = 'Unable to load sitemap automatically. Paste URLs manually or retry once the helper server is running.';
+      } else if (state.siteStructure.length === 0) {
+        label = 'No sitemap data loaded yet. Click “Refresh sitemap” to fetch the latest structure.';
+      } else {
+        label = `${summary.selected} of ${summary.total} sections selected`;
+      }
+      elements.structureSummaryLabel.textContent = label;
+    }
+
+    if (elements.structureChips) {
+      if (state.structureLoading || state.structureError || summary.selectedList.length === 0) {
+        elements.structureChips.innerHTML = '';
+      } else {
+        elements.structureChips.innerHTML = summary.selectedList
+          .slice(0, 8)
+          .map(
+            (item) =>
+              `<span class="structure-chip" title="${escapeHtml(item.path)}">${escapeHtml(item.title)}</span>`
+          )
+          .join('');
+      }
+    }
+
+    if (elements.structureStatus) {
+      let statusMessage = '';
+      if (state.structureLoading) {
+        statusMessage = 'Loading sitemap…';
+      } else if (state.structureError) {
+        statusMessage = state.structureError;
+      }
+      elements.structureStatus.textContent = statusMessage;
+      elements.structureStatus.hidden = statusMessage.length === 0;
+    }
+
+    if (state.structureLoading) {
+      elements.structureTree.innerHTML =
+        '<div class="structure-skeleton"></div><div class="structure-skeleton"></div><div class="structure-skeleton"></div>';
+      elements.structureTree.setAttribute('aria-busy', 'true');
+      updateStructureActionState(summary);
+      return;
+    }
+
+    elements.structureTree.removeAttribute('aria-busy');
+
+    if (state.structureError || state.siteStructure.length === 0) {
+      elements.structureTree.innerHTML = '';
+      updateStructureActionState(summary);
+      return;
+    }
+
+    let total = 0;
+    let selected = 0;
+    const fragments = state.siteStructure.map((group) => {
+      const rendered = renderStructureGroup(group);
+      total += rendered.total;
+      selected += rendered.selected;
+      return rendered.html;
+    });
+
+    elements.structureTree.innerHTML = fragments.join('');
+    updateStructureActionState({ total, selected, selectedList: summary.selectedList });
+    setIndeterminateFlags();
+  }
+
+  function renderStructureGroup(group) {
+    let total = 0;
+    let selected = 0;
+    const items = group.items
+      .map((node) => {
+        const rendered = renderStructureNode(node);
+        total += rendered.total;
+        selected += rendered.selected;
+        return rendered.html;
+      })
+      .join('');
+    const isOpen = state.structureOpenGroups.has(group.key);
+    const html = `
+      <details class="structure-group" data-group="${escapeHtml(group.key)}" ${isOpen ? 'open' : ''}>
+        <summary>
+          <span>${escapeHtml(group.title)}</span>
+          <span class="structure-count">${selected} / ${total} selected</span>
+        </summary>
+        <div class="structure-group-body">
+          <div class="structure-group-actions">
+            <button type="button" class="chip-button" data-action="group-select-all" data-group="${escapeHtml(
+              group.key
+            )}" ${selected === total ? 'disabled' : ''}>Select group</button>
+            <button type="button" class="chip-button" data-action="group-clear" data-group="${escapeHtml(
+              group.key
+            )}" ${selected === 0 ? 'disabled' : ''}>Clear group</button>
+          </div>
+          <ul class="structure-list">
+            ${items}
+          </ul>
+        </div>
+      </details>
+    `;
+    return { html, total, selected };
+  }
+
+  function renderStructureNode(node) {
+    let total = 1;
+    const isSelected = state.selectedStructureUrls.has(node.url);
+    let selected = isSelected ? 1 : 0;
+    const childFragments = [];
+
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      node.children.forEach((child) => {
+        const renderedChild = renderStructureNode(child);
+        total += renderedChild.total;
+        selected += renderedChild.selected;
+        childFragments.push(renderedChild.html);
+      });
+    }
+
+    const hasChildren = childFragments.length > 0;
+    const indeterminate = !isSelected && selected > 0;
+    const metaParts = [];
+    if (hasChildren) {
+      metaParts.push(`${node.children.length} subpage${node.children.length === 1 ? '' : 's'}`);
+    }
+    if (node.path) {
+      metaParts.push(node.path);
+    }
+    const meta = metaParts.length ? `<div class="structure-meta">${escapeHtml(metaParts.join(' • '))}</div>` : '';
+    const childrenHtml = hasChildren ? `<div class="structure-children">${childFragments.join('')}</div>` : '';
+
+    const html = `
+      <li class="structure-node" data-url="${escapeHtml(node.url)}">
+        <label>
+          <input type="checkbox" data-url="${escapeHtml(node.url)}" ${isSelected ? 'checked' : ''} ${
+      indeterminate ? 'data-indeterminate="true"' : ''
+    } aria-label="${escapeHtml(node.title)}">
+          <span>${escapeHtml(node.title)}</span>
+        </label>
+        ${meta}
+        ${childrenHtml}
+      </li>
+    `;
+    return { html, total, selected };
+  }
+
+  function setIndeterminateFlags() {
+    if (!elements.structureTree) {
+      return;
+    }
+    const apply = () => {
+      elements.structureTree.querySelectorAll('input[data-indeterminate="true"]').forEach((input) => {
+        input.indeterminate = true;
+      });
+    };
+    if (typeof queueMicrotask === 'function') {
+      queueMicrotask(apply);
+    } else {
+      setTimeout(apply, 0);
+    }
+  }
+
+  function computeStructureSummary() {
+    let total = 0;
+    let selected = 0;
+    const collector = [];
+    state.siteStructure.forEach((group) => {
+      group.items.forEach((node) => {
+        const stats = gatherNodeStats(node, collector);
+        total += stats.total;
+        selected += stats.selected;
+      });
+    });
+    return { total, selected, selectedList: collector };
+  }
+
+  function gatherNodeStats(node, collector) {
+    let total = 1;
+    const isSelected = state.selectedStructureUrls.has(node.url);
+    let selected = isSelected ? 1 : 0;
+    if (isSelected && collector.length < 16) {
+      collector.push({ title: node.title, path: node.path || node.url });
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      node.children.forEach((child) => {
+        const childStats = gatherNodeStats(child, collector);
+        total += childStats.total;
+        selected += childStats.selected;
+      });
+    }
+    return { total, selected };
+  }
+
+  function updateStructureActionState(summary) {
+    if (!elements.structureActions) {
+      return;
+    }
+    const counts = summary || computeStructureSummary();
+    const total = counts.total;
+    const selected = counts.selected;
+    const hasStructure = state.siteStructure.length > 0;
+
+    elements.structureActions.querySelectorAll('button[data-action]').forEach((button) => {
+      const action = button.dataset.action;
+      if (action === 'refresh-structure') {
+        button.disabled = state.structureLoading;
+      } else if (action === 'select-all') {
+        button.disabled = state.structureLoading || !hasStructure || total === 0 || selected >= total;
+      } else if (action === 'clear-selection') {
+        button.disabled = state.structureLoading || selected === 0;
+      } else if (action === 'expand-all' || action === 'collapse-all') {
+        button.disabled = state.structureLoading || !hasStructure;
+      }
+    });
+  }
+
+  function handleStructureAction(event) {
+    const button = event.target.closest('button[data-action]');
+    if (!button) {
+      return;
+    }
+    const action = button.dataset.action;
+    if (!action) {
+      return;
+    }
+    event.preventDefault();
+    switch (action) {
+      case 'refresh-structure':
+        loadSiteStructure({ force: true });
+        break;
+      case 'select-all':
+        selectAllStructureNodes();
+        break;
+      case 'clear-selection':
+        clearAllStructureSelections();
+        break;
+      case 'expand-all':
+        expandAllStructureGroups();
+        break;
+      case 'collapse-all':
+        collapseAllStructureGroups();
+        break;
+      default:
+        break;
+    }
+  }
+
+  function handleStructureTreeChange(event) {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || !input.matches('input[type="checkbox"][data-url]')) {
+      return;
+    }
+    const url = input.dataset.url;
+    const node = findNodeByUrl(url);
+    const affectedUrls = node ? collectNodeUrls(node, []) : [url];
+    if (input.checked) {
+      affectedUrls.forEach((value) => state.selectedStructureUrls.add(value));
+    } else {
+      affectedUrls.forEach((value) => state.selectedStructureUrls.delete(value));
+    }
+    renderStructurePanel();
+    if (node) {
+      log(`${input.checked ? 'Selected' : 'Cleared'} “${node.title}” from the sitemap panel.`, 'info');
+    }
+  }
+
+  function handleStructureTreeClick(event) {
+    const button = event.target.closest('button[data-action]');
+    if (!button) {
+      return;
+    }
+    const action = button.dataset.action;
+    if (action !== 'group-select-all' && action !== 'group-clear') {
+      return;
+    }
+    event.preventDefault();
+    const groupKey = button.dataset.group;
+    if (!groupKey) {
+      return;
+    }
+    if (action === 'group-select-all') {
+      selectStructureGroup(groupKey);
+    } else {
+      clearStructureGroup(groupKey);
+    }
+  }
+
+  function handleStructureGroupToggle(event) {
+    const details = event.target;
+    if (!(details instanceof HTMLDetailsElement) || !details.matches('.structure-group')) {
+      return;
+    }
+    const key = details.dataset.group;
+    if (!key) {
+      return;
+    }
+    if (details.open) {
+      state.structureOpenGroups.add(key);
+    } else {
+      state.structureOpenGroups.delete(key);
+    }
+  }
+
+  function selectAllStructureNodes() {
+    const urls = [];
+    state.siteStructure.forEach((group) => collectGroupUrls(group, urls));
+    if (urls.length === 0) {
+      return;
+    }
+    urls.forEach((url) => state.selectedStructureUrls.add(url));
+    renderStructurePanel();
+    log(`Selected ${urls.length} section${urls.length === 1 ? '' : 's'} from the sitemap.`, 'success');
+  }
+
+  function clearAllStructureSelections() {
+    if (state.selectedStructureUrls.size === 0) {
+      return;
+    }
+    state.selectedStructureUrls.clear();
+    renderStructurePanel();
+    log('Cleared all sitemap selections.', 'info');
+  }
+
+  function expandAllStructureGroups() {
+    state.structureOpenGroups = new Set(state.siteStructure.map((group) => group.key));
+    renderStructurePanel();
+  }
+
+  function collapseAllStructureGroups() {
+    state.structureOpenGroups = new Set();
+    renderStructurePanel();
+  }
+
+  function selectStructureGroup(key) {
+    const group = findStructureGroup(key);
+    if (!group) {
+      return;
+    }
+    const urls = collectGroupUrls(group, []);
+    if (urls.length === 0) {
+      return;
+    }
+    urls.forEach((url) => state.selectedStructureUrls.add(url));
+    renderStructurePanel();
+    log(`Selected ${urls.length} section${urls.length === 1 ? '' : 's'} from “${group.title}”.`, 'success');
+  }
+
+  function clearStructureGroup(key) {
+    const group = findStructureGroup(key);
+    if (!group) {
+      return;
+    }
+    const urls = collectGroupUrls(group, []);
+    urls.forEach((url) => state.selectedStructureUrls.delete(url));
+    renderStructurePanel();
+    log(`Cleared selections for “${group.title}”.`, 'info');
+  }
+
+  function findStructureGroup(key) {
+    return state.siteStructure.find((group) => group.key === key) || null;
+  }
+
+  function findNodeByUrl(url) {
+    for (const group of state.siteStructure) {
+      const match = findNodeInList(group.items, url);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  }
+
+  function findNodeInList(nodes, url) {
+    if (!Array.isArray(nodes)) {
+      return null;
+    }
+    for (const node of nodes) {
+      if (node.url === url) {
+        return node;
+      }
+      const childMatch = findNodeInList(node.children, url);
+      if (childMatch) {
+        return childMatch;
+      }
+    }
+    return null;
+  }
+
+  function collectGroupUrls(group, accumulator = []) {
+    if (!group || !Array.isArray(group.items)) {
+      return accumulator;
+    }
+    group.items.forEach((node) => collectNodeUrls(node, accumulator));
+    return accumulator;
+  }
+
+  function collectNodeUrls(node, accumulator = []) {
+    if (!node) {
+      return accumulator;
+    }
+    const add = (value) => {
+      if (!value) {
+        return;
+      }
+      if (accumulator instanceof Set) {
+        accumulator.add(value);
+      } else if (Array.isArray(accumulator)) {
+        accumulator.push(value);
+      }
+    };
+    add(node.url);
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      node.children.forEach((child) => collectNodeUrls(child, accumulator));
+    }
+    return accumulator;
   }
 
   function setMode(mode) {
-    if (state.mode === mode) return;
+    if (!mode) return;
+    const previousMode = state.mode;
     state.mode = mode;
-    elements.modeButtons.forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.mode === mode);
-    });
-    log(`Switched to ${modeLabel(mode)} mode.`);
+    if (elements.modeSelect && elements.modeSelect.value !== mode) {
+      elements.modeSelect.value = mode;
+    }
+    if (elements.pathsField) {
+      const hidePaths = mode === 'sitemap';
+      elements.pathsField.classList.toggle('hidden', hidePaths);
+      elements.pathsField.setAttribute('aria-hidden', String(hidePaths));
+    }
+    if (elements.batchProgress) {
+      elements.batchProgress.classList.toggle('hidden', mode !== 'batch');
+    }
+    if (mode !== previousMode) {
+      log(`Switched to ${modeLabel(mode)} mode.`);
+    }
   }
 
   function modeLabel(mode) {
@@ -116,6 +964,8 @@
         return 'batch';
       case 'section':
         return 'section crawl';
+      case 'sitemap':
+        return 'sitemap selection';
       default:
         return 'single page';
     }
@@ -127,24 +977,51 @@
       return;
     }
 
-    state.baseUrl = (elements.baseUrl.value || 'https://www.adxs.org').trim().replace(/\/$/, '');
-    const rawPaths = elements.paths.value
+    if (!ensureHttpContext()) {
+      return;
+    }
+
+    const baseInput = elements.baseUrl.value?.trim() || DEFAULT_BASE_URL;
+    state.baseUrl = baseInput.replace(/\/$/, '') || DEFAULT_BASE_URL;
+    state.language = deriveLanguageSegment(state.baseUrl);
+
+    const currentOrigin = extractOrigin(state.baseUrl);
+    if (state.structureOrigin !== currentOrigin || state.structureLanguage !== state.language) {
+      loadSiteStructure({ silent: true, force: true });
+    }
+
+    const manualPaths = (elements.paths.value || '')
       .split(/\n+/)
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
 
-    if (rawPaths.length === 0) {
-      rawPaths.push('');
+    const sitemapSelections = Array.from(state.selectedStructureUrls);
+    const combined = [...sitemapSelections, ...manualPaths];
+
+    if (combined.length === 0) {
+      combined.push('');
     }
+
+    const uniquePaths = Array.from(new Set(combined));
 
     let queue;
     if (state.mode === 'single') {
-      queue = [buildUrl(rawPaths[0])];
-      if (rawPaths.length > 1) {
-        log('Single page mode only scrapes the first path provided. Additional entries were ignored.', 'warning');
+      queue = [buildUrl(uniquePaths[0])];
+      if (uniquePaths.length > 1) {
+        log('Single page mode only scrapes the first selected or entered path. Extra entries were skipped.', 'warning');
       }
     } else {
-      queue = rawPaths.map((path) => buildUrl(path));
+      queue = uniquePaths.map((path) => buildUrl(path));
+    }
+
+    if (sitemapSelections.length > 0) {
+      log(
+        `${sitemapSelections.length} sitemap selection${sitemapSelections.length === 1 ? '' : 's'} added to the queue.`,
+        'info'
+      );
+    }
+    if (manualPaths.length > 0) {
+      log(`${manualPaths.length} manual path${manualPaths.length === 1 ? '' : 's'} added to the queue.`, 'info');
     }
 
     state.queue = queue;
@@ -152,6 +1029,8 @@
     state.processed = 0;
     state.results = [];
     state.logs = [];
+    state.documents = [];
+    state.selectedSections = new Map();
     state.isRunning = true;
     state.isPaused = false;
 
@@ -159,6 +1038,9 @@
     elements.pauseBtn.textContent = 'Pause';
     elements.stopBtn.disabled = false;
     elements.startBtn.disabled = true;
+    if (elements.documentName) {
+      elements.documentName.value = '';
+    }
 
     updateStatus('active', 'Running');
     updateProgress();
@@ -167,6 +1049,8 @@
     renderPreview();
     renderStats();
     renderValidation();
+    renderDocumentBuilder();
+    renderDocuments();
     log(`Session started in ${modeLabel(state.mode)} mode targeting ${state.total} page${state.total === 1 ? '' : 's'}.`);
     processQueue();
   }
@@ -208,6 +1092,8 @@
     elements.pauseBtn.textContent = 'Pause';
     updateStatus('idle', 'Stopped');
     updateProgress();
+    renderDocumentBuilder();
+    renderDocuments();
     log('Session stopped by user.');
   }
 
@@ -234,6 +1120,8 @@
       renderStats();
       updateExports();
       renderValidation();
+      renderDocumentBuilder();
+      renderDocuments();
       if (result.validation?.summary) {
         const { summary } = result.validation;
         const validationSeverity = summary.status === 'error' ? 'error' : summary.status === 'warning' ? 'warning' : 'success';
@@ -270,14 +1158,18 @@
     updateStatus('idle', 'Completed');
     updateProgress();
     renderLogs();
+    renderDocumentBuilder();
+    renderDocuments();
     log('Scraping session completed.');
   }
 
   async function scrapeUrl(url) {
-    const response = await fetch(url, {
+    const response = await fetch(buildProxyUrl(url), {
       method: 'GET',
-      mode: 'cors',
-      credentials: 'omit'
+      credentials: 'omit',
+      headers: {
+        Accept: 'text/html,application/xhtml+xml'
+      }
     });
 
     if (!response.ok) {
@@ -296,11 +1188,7 @@
     const footnotes = state.options.footnotes ? collectFootnotes(doc) : [];
     const validation = validatePage(inlineCitations, tooltips, footnotes, state.options);
 
-    const wordCount = main.textContent
-      .replace(/\s+/g, ' ')
-      .trim()
-      .split(' ')
-      .filter(Boolean).length;
+    const wordCount = countWords(main.textContent);
 
     return {
       url,
@@ -376,32 +1264,36 @@
   }
 
   function collectInlineCitations(root) {
-    const nodes = Array.from(
-      root.querySelectorAll('sup, a[rel="footnote"], a[href*="#cite"], a[href*="#footnote"], a[href*="#fn"], span.citation')
-    );
+    const doc = root.ownerDocument || document;
+    const selector =
+      'sup, a[rel="footnote"], a[role="doc-noteref"], a.footnote-ref, a[href*="#cite"], a[href*="#footnote"], a[href*="#fn"], span.citation';
+    const nodes = Array.from(root.querySelectorAll(selector));
 
     const citations = nodes
       .map((node, index) => {
-        const anchor = node.tagName === 'SUP' ? node.querySelector('a') || node : node;
-        const href = anchor.getAttribute('href') || '';
-        const text = anchor.textContent.trim();
+        const sup = node.closest('sup');
+        const anchor = resolveCitationAnchor(node);
+        const text = normaliseWhitespace(anchor?.textContent || node.textContent);
         if (!text) {
           return null;
         }
-        const tooltipId = (anchor.getAttribute('aria-describedby') || node.getAttribute('aria-describedby') || '').trim();
-        const tooltipText =
-          anchor.getAttribute('data-tooltip') ||
-          anchor.getAttribute('title') ||
-          node.getAttribute('data-tooltip') ||
-          node.getAttribute('title') ||
+        const href = anchor?.getAttribute('href') || node.getAttribute('href') || '';
+        const tooltipId =
+          anchor?.getAttribute('aria-describedby') ||
+          node.getAttribute('aria-describedby') ||
+          sup?.id ||
+          anchor?.id ||
+          node.id ||
           '';
+        const tooltipInfo = extractTooltipContent(doc, anchor, node, sup);
         return {
-          id: anchor.id || node.id || `citation-${index + 1}`,
+          id: anchor?.id || node.id || sup?.id || `citation-${index + 1}`,
           text,
           href,
-          tooltipId,
-          tooltipText: tooltipText.trim(),
-          context: node.closest('p, li')?.textContent?.trim().slice(0, 240) || ''
+          tooltipId: tooltipId.trim(),
+          tooltipText: tooltipInfo.text,
+          tooltipHtml: tooltipInfo.html,
+          context: normaliseWhitespace(node.closest('p, li')?.textContent || '').slice(0, 240)
         };
       })
       .filter(Boolean);
@@ -409,7 +1301,7 @@
     const unique = [];
     const seen = new Set();
     citations.forEach((item) => {
-      const key = `${item.text}|${item.href}`;
+      const key = `${item.text}|${item.href}|${item.tooltipHtml}`;
       if (!seen.has(key)) {
         seen.add(key);
         unique.push(item);
@@ -420,15 +1312,25 @@
   }
 
   function collectTooltips(root) {
-    const nodes = Array.from(root.querySelectorAll('[data-tooltip], [title], abbr[title], span.tooltip'));
+    const doc = root.ownerDocument || document;
+    const selector = '[data-tippy-content], [data-tooltip], [title], abbr[title], span.tooltip';
+    const nodes = Array.from(root.querySelectorAll(selector));
     return nodes
       .map((node, index) => {
-        const tooltip = node.getAttribute('data-tooltip') || node.getAttribute('title');
-        if (!tooltip) return null;
+        const sup = node.closest('sup');
+        const tooltipInfo = extractTooltipContent(doc, node, sup);
+        if (!tooltipInfo.text && !tooltipInfo.html) return null;
+        const referenceId =
+          node.getAttribute('aria-describedby') ||
+          node.getAttribute('data-tooltip-id') ||
+          sup?.id ||
+          '';
         return {
-          id: node.id || `tooltip-${index + 1}`,
-          text: tooltip.trim(),
-          context: node.textContent.trim()
+          id: node.id || sup?.id || `tooltip-${index + 1}`,
+          referenceId: referenceId.trim(),
+          text: tooltipInfo.text,
+          html: tooltipInfo.html,
+          context: normaliseWhitespace(node.textContent).slice(0, 240)
         };
       })
       .filter(Boolean);
@@ -459,7 +1361,7 @@
       seen.add(id);
       unique.push({
         id,
-        text: node.textContent.trim(),
+        text: normaliseWhitespace(node.textContent),
         html: node.innerHTML.trim()
       });
     });
@@ -537,7 +1439,7 @@
     const tooltipTextMap = new Map();
     if (captureTooltips) {
       tooltips.forEach((tooltip) => {
-        collectKeys([tooltip.id]).forEach((key) => {
+        collectKeys([tooltip.id, tooltip.referenceId]).forEach((key) => {
           if (!tooltipMap.has(key)) {
             tooltipMap.set(key, tooltip);
           }
@@ -578,7 +1480,7 @@
         for (const key of tooltipKeys) {
           if (tooltipMap.has(key)) {
             tooltip = tooltipMap.get(key);
-            collectKeys([tooltip.id]).forEach((variant) => referencedTooltipIds.add(variant));
+            collectKeys([tooltip.id, tooltip.referenceId]).forEach((variant) => referencedTooltipIds.add(variant));
             if (tooltip.text) {
               referencedTooltipTexts.add(tooltip.text.trim().toLowerCase());
             }
@@ -591,7 +1493,7 @@
           if (tooltipTextMap.has(textKey)) {
             tooltip = tooltipTextMap.get(textKey);
             if (tooltip.id) {
-              collectKeys([tooltip.id]).forEach((variant) => referencedTooltipIds.add(variant));
+              collectKeys([tooltip.id, tooltip.referenceId]).forEach((variant) => referencedTooltipIds.add(variant));
             }
             referencedTooltipTexts.add(textKey);
           }
@@ -650,7 +1552,9 @@
           footnoteId: footnote?.id || '',
           footnoteTarget,
           tooltipId: tooltip?.id || citation.tooltipId || '',
+          tooltipReferenceId: tooltip?.referenceId || citation.tooltipId || '',
           tooltipText: citation.tooltipText || tooltip?.text || '',
+          tooltipHtml: citation.tooltipHtml || tooltip?.html || '',
           href: citation.href,
           context: citation.context || ''
         }
@@ -683,13 +1587,16 @@
           idKeys.some((key) => referencedTooltipIds.has(key)) ||
           (textKey && referencedTooltipTexts.has(textKey));
         if (!hasReference) {
+          const label = tooltip.id || tooltip.referenceId || tooltip.text.slice(0, 40) || `#${tooltips.indexOf(tooltip) + 1}`;
           record({
             severity: 'warning',
             scope: 'tooltip',
-            message: `Tooltip ${tooltip.id || tooltip.text.slice(0, 40)} is not associated with any citation.`,
+            message: `Tooltip ${label} is not associated with any citation.`,
             details: {
               tooltipId: tooltip.id,
-              tooltipText: tooltip.text
+              referenceId: tooltip.referenceId || '',
+              tooltipText: tooltip.text,
+              tooltipHtml: tooltip.html || ''
             }
           });
         }
@@ -731,14 +1638,19 @@
   }
 
   function switchTab(tabName) {
-    elements.tabButtons.forEach((btn) => {
+    if (!elements.previewTabs?.length || !elements.previewPanes?.length) {
+      return;
+    }
+
+    elements.previewTabs.forEach((btn) => {
       const isActive = btn.dataset.tab === tabName;
       btn.classList.toggle('active', isActive);
       btn.setAttribute('aria-selected', String(isActive));
     });
 
-    elements.tabPanels.forEach((panel) => {
-      const isActive = panel.id === `${tabName}Pane`;
+    const targetId = `${tabName}Preview`;
+    elements.previewPanes.forEach((panel) => {
+      const isActive = panel.id === targetId;
       panel.classList.toggle('active', isActive);
       panel.setAttribute('aria-hidden', String(!isActive));
     });
@@ -749,7 +1661,13 @@
     const processed = state.processed || 0;
     const current = activeUrl ? Math.min(processed, total) : processed;
     const progress = total === 0 ? 0 : Math.round((current / total) * 100);
-    elements.progressBar.style.width = `${progress}%`;
+    if (elements.progressFill) {
+      elements.progressFill.style.width = `${progress}%`;
+    }
+    if (elements.progressContainer) {
+      elements.progressContainer.classList.toggle('hidden', total === 0);
+      elements.progressContainer.setAttribute('aria-hidden', String(total === 0));
+    }
     let activeLabel = 'Processing';
     if (activeUrl) {
       try {
@@ -759,44 +1677,45 @@
         activeLabel = activeUrl;
       }
     }
-    elements.progressText.textContent = state.isRunning
-      ? activeLabel
-      : processed === 0
-      ? 'Awaiting configuration'
-      : 'Session complete';
-    elements.batchCounter.textContent = `${Math.min(processed, total)} / ${total}`;
+    if (elements.progressText) {
+      elements.progressText.textContent = state.isRunning
+        ? activeLabel
+        : processed === 0
+        ? 'Awaiting configuration'
+        : 'Session complete';
+    }
+    if (elements.pagesScraped) {
+      elements.pagesScraped.textContent = Math.min(processed, total);
+    }
   }
 
   function updateStatus(type, label) {
-    elements.statusPill.textContent = label;
-    let background;
-    switch (type) {
-      case 'active':
-        background = 'rgba(56, 189, 248, 0.2)';
-        break;
-      case 'paused':
-        background = 'rgba(250, 204, 21, 0.25)';
-        break;
-      case 'idle':
-      default:
-        background = 'rgba(148, 163, 184, 0.2)';
+    if (!elements.statusIndicator) return;
+    elements.statusIndicator.textContent = `● ${label}`;
+    elements.statusIndicator.classList.remove('status-ready', 'status-processing', 'status-error');
+    if (type === 'active') {
+      elements.statusIndicator.classList.add('status-processing');
+    } else if (type === 'error') {
+      elements.statusIndicator.classList.add('status-error');
+    } else {
+      elements.statusIndicator.classList.add('status-ready');
     }
-    elements.statusPill.style.background = background;
   }
 
   function renderPreview() {
-    const container = elements.previewContent;
+    if (!elements.contentPreview) return;
+
     if (state.results.length === 0) {
-      elements.previewEmpty.hidden = false;
-      container.hidden = true;
-      container.innerHTML = '';
+      setPreviewPlaceholder(elements.contentPreview, 'No content scraped yet. Configure your run and click <strong>Start Scraping</strong>.');
+      setPreviewPlaceholder(elements.citationsPreview, 'No citations extracted yet.');
+      setPreviewPlaceholder(elements.structurePreview, 'No structure captured yet.');
+      if (elements.rawOutput) {
+        elements.rawOutput.textContent = '[]';
+      }
       return;
     }
 
-    elements.previewEmpty.hidden = true;
-    container.hidden = false;
-
-    container.innerHTML = state.results
+    elements.contentPreview.innerHTML = state.results
       .map((result) => {
         let hostname = '';
         try {
@@ -827,7 +1746,7 @@
                 <span>${result.stats.words} words</span>
               </div>
             </header>
-            ${sectionPreview}
+            ${sectionPreview || '<p>No sections captured.</p>'}
             <footer>
               <a href="${result.url}" target="_blank" rel="noopener">Open on ADXS.org</a>
             </footer>
@@ -835,6 +1754,76 @@
         `;
       })
       .join('');
+
+    if (elements.citationsPreview) {
+      const citationHtml = state.results
+        .map((result) => {
+          if (!result.inlineCitations?.length) {
+            return `
+              <article class="preview-card">
+                <header><h3>${escapeHtml(result.title)}</h3></header>
+                <p class="preview-placeholder">No inline citations detected for this page.</p>
+              </article>
+            `;
+          }
+          const items = result.inlineCitations
+            .map(
+              (citation, index) => `
+                <div class="citation-preview">
+                  <span class="citation-number">[${index + 1}] ${escapeHtml(citation.text)}</span>
+                  ${citation.tooltipText ? `<div class="citation-text">${escapeHtml(citation.tooltipText)}</div>` : ''}
+                  ${citation.href ? `<a class="citation-link" href="${citation.href}" target="_blank" rel="noopener">${escapeHtml(citation.href)}</a>` : ''}
+                </div>
+              `
+            )
+            .join('');
+          return `
+            <article class="preview-card">
+              <header><h3>${escapeHtml(result.title)}</h3></header>
+              ${items}
+            </article>
+          `;
+        })
+        .join('');
+      elements.citationsPreview.innerHTML = citationHtml;
+    }
+
+    if (elements.structurePreview) {
+      const structureHtml = state.results
+        .map((result) => {
+          if (!result.sections?.length) {
+            return '';
+          }
+          const listItems = result.sections
+            .map(
+              (section, index) => `
+                <li>
+                  <span class="section-order">${index + 1}.</span>
+                  <span class="section-heading">${escapeHtml(section.heading)}</span>
+                </li>
+              `
+            )
+            .join('');
+          return `
+            <article class="preview-card">
+              <header><h3>${escapeHtml(result.title)}</h3></header>
+              <ul class="section-list">${listItems}</ul>
+            </article>
+          `;
+        })
+        .filter(Boolean)
+        .join('');
+      elements.structurePreview.innerHTML = structureHtml || '<p class="preview-placeholder">No sections captured.</p>';
+    }
+
+    if (elements.rawOutput) {
+      elements.rawOutput.textContent = JSON.stringify(state.results, null, 2);
+    }
+  }
+
+  function setPreviewPlaceholder(element, message) {
+    if (!element) return;
+    element.innerHTML = `<p class="preview-placeholder">${message}</p>`;
   }
 
   function renderStats() {
@@ -857,6 +1846,15 @@
     elements.statTooltips.textContent = totals.tooltips;
     elements.statFootnotes.textContent = totals.footnotes;
     elements.statWords.textContent = totals.words.toLocaleString();
+    if (elements.pagesScraped) {
+      elements.pagesScraped.textContent = totals.pages;
+    }
+    if (elements.citationsFound) {
+      elements.citationsFound.textContent = totals.citations;
+    }
+    if (elements.sectionsFound) {
+      elements.sectionsFound.textContent = totals.sections;
+    }
   }
 
   function renderValidation() {
@@ -928,23 +1926,33 @@
 
     if (!aggregated.length) {
       if (elements.validationEmpty) {
-        elements.validationEmpty.hidden = false;
+        elements.validationEmpty.classList.remove('hidden');
       }
-      elements.validationList.hidden = true;
+      elements.validationList.classList.add('hidden');
       elements.validationList.innerHTML = '';
       return;
     }
 
     if (elements.validationEmpty) {
-      elements.validationEmpty.hidden = true;
+      elements.validationEmpty.classList.add('hidden');
     }
-    elements.validationList.hidden = false;
+    elements.validationList.classList.remove('hidden');
 
     elements.validationList.innerHTML = aggregated
       .map((item) => {
         const detailLines = [];
         if (item.details) {
-          const { citationText, citationId, footnoteId, footnoteTarget, tooltipId, tooltipText, href } = item.details;
+          const {
+            citationText,
+            citationId,
+            footnoteId,
+            footnoteTarget,
+            tooltipId,
+            tooltipText,
+            tooltipReferenceId,
+            tooltipHtml,
+            href
+          } = item.details;
           if (citationText) {
             detailLines.push(`Citation text: ${citationText}`);
           }
@@ -961,6 +1969,13 @@
             detailLines.push(`Tooltip ref: ${tooltipId}`);
           } else if (tooltipText && item.scope === 'citation') {
             detailLines.push(`Tooltip text: ${tooltipText}`);
+          }
+          if (tooltipReferenceId && tooltipReferenceId !== tooltipId) {
+            detailLines.push(`Tooltip reference id: ${tooltipReferenceId}`);
+          }
+          if (tooltipHtml && item.scope === 'tooltip') {
+            const clipped = tooltipHtml.length > 120 ? `${tooltipHtml.slice(0, 120)}…` : tooltipHtml;
+            detailLines.push(`Tooltip HTML: ${clipped}`);
           }
           if (href) {
             detailLines.push(`Href: ${href}`);
@@ -1001,12 +2016,477 @@
       .join('');
   }
 
+  function renderDocumentBuilder() {
+    if (!elements.documentBuilder || !elements.documentsEmpty || !elements.documentActions) {
+      return;
+    }
+
+    const hasResults = state.results.length > 0;
+    elements.documentsEmpty.classList.toggle('hidden', hasResults);
+    elements.documentBuilder.classList.toggle('hidden', !hasResults);
+    elements.documentActions.classList.toggle('hidden', !hasResults);
+
+    if (!hasResults) {
+      if (elements.documentList) {
+        elements.documentList.classList.add('hidden');
+        elements.documentList.innerHTML = '';
+      }
+      return;
+    }
+
+    const markup = state.results
+      .map((result, index) => {
+        const selectedIds = state.selectedSections.get(index) || new Set();
+        const sectionMarkup = result.sections
+          .map(
+            (section) => `
+              <div class="doc-section">
+                <label>
+                  <input type="checkbox" data-page-index="${index}" data-section-id="${escapeHtml(section.id)}" ${
+              selectedIds.has(section.id) ? 'checked' : ''
+            }>
+                  <span>${escapeHtml(section.heading)}</span>
+                </label>
+              </div>
+            `
+          )
+          .join('');
+        const sectionLabel = `${result.stats.sections} section${result.stats.sections === 1 ? '' : 's'}`;
+        const selectedLabel = `${selectedIds.size} selected`;
+        const openAttr = selectedIds.size > 0 ? ' open' : '';
+        return `
+          <details class="doc-source" data-page-index="${index}"${openAttr}>
+            <summary data-page-index="${index}">
+              <span>${escapeHtml(result.title)}</span>
+              <span class="doc-meta">
+                <span data-role="total">${sectionLabel}</span>
+                <span data-role="selected" data-page-index="${index}">${selectedLabel}</span>
+              </span>
+            </summary>
+            <div class="doc-section-list">
+              ${sectionMarkup || '<p class="document-empty">No sections detected for this page.</p>'}
+            </div>
+          </details>
+        `;
+      })
+      .join('');
+
+    elements.documentBuilder.innerHTML = markup;
+  }
+
+  function handleDocumentSelectionChange(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || target.type !== 'checkbox') {
+      return;
+    }
+    const pageIndex = Number(target.dataset.pageIndex);
+    const sectionId = target.dataset.sectionId;
+    if (!Number.isInteger(pageIndex) || !sectionId) {
+      return;
+    }
+
+    let selection = state.selectedSections.get(pageIndex);
+    if (!selection) {
+      selection = new Set();
+      state.selectedSections.set(pageIndex, selection);
+    }
+
+    if (target.checked) {
+      selection.add(sectionId);
+    } else {
+      selection.delete(sectionId);
+      if (selection.size === 0) {
+        state.selectedSections.delete(pageIndex);
+      }
+    }
+
+    updateDocumentSelectionMeta(pageIndex);
+  }
+
+  function updateDocumentSelectionMeta(pageIndex) {
+    if (!elements.documentBuilder) return;
+    const meta = elements.documentBuilder.querySelector(
+      `summary [data-role="selected"][data-page-index="${pageIndex}"]`
+    );
+    const selection = state.selectedSections.get(pageIndex);
+    const count = selection ? selection.size : 0;
+    if (meta) {
+      meta.textContent = `${count} selected`;
+    }
+  }
+
+  function clearSelectedSections() {
+    if (state.selectedSections.size === 0) {
+      log('No sections are currently selected.', 'info');
+      return;
+    }
+    state.selectedSections.clear();
+    renderDocumentBuilder();
+    renderDocuments();
+    log('Cleared the current section selection.', 'info');
+  }
+
+  function collectSelectedSections() {
+    const collected = [];
+    state.results.forEach((result, pageIndex) => {
+      const selection = state.selectedSections.get(pageIndex);
+      if (!selection || selection.size === 0) {
+        return;
+      }
+      result.sections.forEach((section) => {
+        if (!selection.has(section.id)) return;
+        collected.push({
+          pageIndex,
+          pageUrl: result.url,
+          pageTitle: result.title,
+          sectionId: section.id,
+          heading: section.heading,
+          text: section.text,
+          html: section.html,
+          wordCount: countWords(section.text)
+        });
+      });
+    });
+    return collected;
+  }
+
+  function createDocumentFromSelection() {
+    const sections = collectSelectedSections();
+    if (sections.length === 0) {
+      log('Select at least one section before creating a document.', 'warning');
+      return;
+    }
+
+    const nameInput = elements.documentName?.value || '';
+    const name = normaliseWhitespace(nameInput) || `Document ${state.documents.length + 1}`;
+    const grouped = groupSectionsByPage(sections);
+    const wordCount = sections.reduce((total, section) => total + section.wordCount, 0);
+    const documentRecord = {
+      id: `doc-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      name,
+      createdAt: new Date().toISOString(),
+      sections,
+      stats: {
+        sections: sections.length,
+        pages: grouped.length,
+        words: wordCount
+      }
+    };
+
+    state.documents.push(documentRecord);
+    if (elements.documentName) {
+      elements.documentName.value = '';
+    }
+    log(
+      `Created document "${name}" with ${documentRecord.stats.sections} section${
+        documentRecord.stats.sections === 1 ? '' : 's'
+      } from ${documentRecord.stats.pages} page${documentRecord.stats.pages === 1 ? '' : 's'}.`,
+      'success'
+    );
+    renderDocuments();
+  }
+
+  function handleDocumentListClick(event) {
+    const button = event.target.closest('button[data-doc-id]');
+    if (!button) return;
+    const docId = button.dataset.docId;
+    if (!docId) return;
+
+    if (button.dataset.action === 'remove') {
+      removeDocument(docId);
+      return;
+    }
+
+    const format = button.dataset.format;
+    if (format) {
+      exportDocument(docId, format);
+    }
+  }
+
+  function removeDocument(docId) {
+    const index = state.documents.findIndex((doc) => doc.id === docId);
+    if (index === -1) {
+      log('Unable to find the requested document.', 'error');
+      return;
+    }
+    const [removed] = state.documents.splice(index, 1);
+    log(`Removed document "${removed.name}".`, 'info');
+    renderDocuments();
+  }
+
+  function renderDocuments() {
+    if (!elements.documentList) return;
+
+    if (state.results.length === 0) {
+      elements.documentList.classList.add('hidden');
+      elements.documentList.innerHTML = '';
+      return;
+    }
+
+    if (state.documents.length === 0) {
+      elements.documentList.classList.remove('hidden');
+      elements.documentList.innerHTML =
+        '<p class="document-empty">No custom documents yet. Select sections above and create your first document.</p>';
+      return;
+    }
+
+    const cards = state.documents
+      .map((doc) => {
+        const createdDate = new Date(doc.createdAt);
+        const preview = doc.sections
+          .slice(0, 4)
+          .map((section) => `<li>${escapeHtml(section.heading)}<span>${escapeHtml(section.pageTitle)}</span></li>`)
+          .join('');
+        return `
+          <article class="document-card" data-doc-id="${doc.id}">
+            <header>
+              <h3>${escapeHtml(doc.name)}</h3>
+              <div class="meta">
+                <span>${doc.stats.sections} section${doc.stats.sections === 1 ? '' : 's'}</span>
+                <span>${doc.stats.pages} page${doc.stats.pages === 1 ? '' : 's'}</span>
+                <span>${doc.stats.words.toLocaleString()} words</span>
+              </div>
+            </header>
+            <div class="meta">
+              <span>Created ${createdDate.toLocaleString()}</span>
+            </div>
+            <ul class="doc-section-preview">
+              ${preview}
+            </ul>
+            <footer>
+              <button type="button" class="control" data-doc-id="${doc.id}" data-format="markdown">Markdown</button>
+              <button type="button" class="control" data-doc-id="${doc.id}" data-format="html">HTML</button>
+              <button type="button" class="control" data-doc-id="${doc.id}" data-format="json">JSON</button>
+              <button type="button" class="control" data-doc-id="${doc.id}" data-action="remove">Remove</button>
+            </footer>
+          </article>
+        `;
+      })
+      .join('');
+
+    elements.documentList.classList.remove('hidden');
+    elements.documentList.innerHTML = cards;
+  }
+
+  function exportDocument(docId, format) {
+    const doc = state.documents.find((item) => item.id === docId);
+    if (!doc) {
+      log('Unable to find the requested document.', 'error');
+      return;
+    }
+
+    const slug = slugify(doc.name, 'adxs-document');
+    switch (format) {
+      case 'markdown':
+        downloadFile(`${slug}.md`, convertDocumentToMarkdown(doc), 'text/markdown');
+        break;
+      case 'html':
+        downloadFile(`${slug}.html`, convertDocumentToHtml(doc), 'text/html');
+        break;
+      case 'json':
+        downloadFile(`${slug}.json`, JSON.stringify(doc, null, 2), 'application/json');
+        break;
+      default:
+        log(`Unsupported document export format: ${format}`, 'error');
+    }
+  }
+
+  function convertDocumentToMarkdown(doc) {
+    const lines = [
+      `# ${doc.name}`,
+      '',
+      `Generated: ${doc.createdAt}`,
+      `Sections: ${doc.stats.sections}`,
+      `Pages: ${doc.stats.pages}`,
+      `Words: ${doc.stats.words}`,
+      ''
+    ];
+
+    const grouped = groupSectionsByPage(doc.sections);
+    grouped.forEach((group) => {
+      lines.push(`## ${group.pageTitle}`);
+      lines.push(group.pageUrl);
+      lines.push('');
+      group.sections.forEach((section) => {
+        lines.push(`### ${section.heading}`);
+        lines.push(section.text);
+        lines.push('');
+      });
+    });
+
+    return lines.join('\n');
+  }
+
+  function convertDocumentToHtml(doc) {
+    const grouped = groupSectionsByPage(doc.sections);
+    const body = grouped
+      .map((group) => {
+        const sectionsHtml = group.sections
+          .map(
+            (section) => `
+            <section id="${escapeHtml(section.sectionId)}">
+              <h3>${escapeHtml(section.heading)}</h3>
+              <div>${section.html}</div>
+            </section>`
+          )
+          .join('\n');
+
+        return `
+        <article class="page-result">
+          <header>
+            <h2>${escapeHtml(group.pageTitle)}</h2>
+            <p><a href="${group.pageUrl}">${group.pageUrl}</a></p>
+          </header>
+          ${sectionsHtml}
+        </article>`;
+      })
+      .join('\n');
+
+    const wordsFormatted = doc.stats.words.toLocaleString();
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>${escapeHtml(doc.name)} — ADXS export</title>
+<style>
+body { font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 960px; line-height: 1.6; color: #0f172a; }
+h1, h2, h3 { font-weight: 600; }
+.page-result { margin-bottom: 3rem; border-bottom: 1px solid #cbd5f5; padding-bottom: 2rem; }
+.page-result header h2 { margin-bottom: 0.25rem; }
+.page-result header p { margin-top: 0; }
+section { margin-bottom: 1.5rem; }
+section h3 { margin-top: 0; }
+</style>
+</head>
+<body>
+<h1>${escapeHtml(doc.name)}</h1>
+<p>Generated: ${doc.createdAt}</p>
+<p>Sections: ${doc.stats.sections} • Pages: ${doc.stats.pages} • Words: ${wordsFormatted}</p>
+${body}
+</body>
+</html>`;
+  }
+
+  function groupSectionsByPage(sections) {
+    const groups = [];
+    sections.forEach((section) => {
+      let group = groups.find((entry) => entry.pageUrl === section.pageUrl);
+      if (!group) {
+        group = { pageUrl: section.pageUrl, pageTitle: section.pageTitle, sections: [] };
+        groups.push(group);
+      }
+      group.sections.push(section);
+    });
+    return groups;
+  }
+
+  function slugify(value, fallback = 'document') {
+    const base = normaliseWhitespace(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const slug = base || fallback;
+    return slug.slice(0, 80);
+  }
+
+  function countWords(text) {
+    const normalised = normaliseWhitespace(text);
+    if (!normalised) return 0;
+    return normalised.split(' ').filter(Boolean).length;
+  }
+
+  function normaliseWhitespace(value) {
+    return (value ?? '').replace(/\s+/g, ' ').trim();
+  }
+
+  function extractTooltipContent(doc, ...nodes) {
+    let html = '';
+    for (const node of nodes) {
+      if (!node || typeof node.getAttribute !== 'function') continue;
+      const candidate =
+        node.getAttribute('data-tippy-content') ||
+        node.getAttribute('data-tooltip') ||
+        node.getAttribute('title') ||
+        node.getAttribute('data-original-title');
+      if (candidate) {
+        html = candidate.trim();
+        break;
+      }
+    }
+
+    if (!html) {
+      return { text: '', html: '' };
+    }
+
+    const container = doc.createElement('div');
+    container.innerHTML = html;
+    const text = normaliseWhitespace(container.textContent);
+    const sanitisedHtml = container.innerHTML.trim() || html;
+    return { text, html: sanitisedHtml };
+  }
+
+  function resolveCitationAnchor(node) {
+    if (!node) return null;
+    if (node.tagName === 'A') {
+      return node;
+    }
+    const directAnchor = node.querySelector('a.footnote-ref, a[role="doc-noteref"], a[href], a');
+    if (directAnchor) {
+      return directAnchor;
+    }
+    if (node.tagName === 'SUP' || node.tagName === 'SPAN') {
+      const spanWithTooltip = node.querySelector('span[data-tippy-content], span[data-tooltip], span');
+      if (spanWithTooltip) {
+        const nestedAnchor = spanWithTooltip.querySelector('a');
+        return nestedAnchor || spanWithTooltip;
+      }
+    }
+    return node;
+  }
+
+  function ensureHttpContext() {
+    const isHttp = window.location.protocol === 'http:' || window.location.protocol === 'https:';
+    if (!isHttp) {
+      updateProxyWarning(true);
+      log('Start the helper server with npm run dev and open http://localhost:3000 before scraping.', 'error');
+      return false;
+    }
+    updateProxyWarning(false);
+    return true;
+  }
+
+  function updateProxyWarning(forceShow = false) {
+    if (!elements.proxyWarning) return;
+    const isHttp = window.location.protocol === 'http:' || window.location.protocol === 'https:';
+    const shouldShow = forceShow || !isHttp;
+    elements.proxyWarning.hidden = !shouldShow;
+  }
+
+  function buildProxyUrl(targetUrl) {
+    if (!targetUrl) {
+      throw new Error('Missing target URL for proxy request.');
+    }
+
+    const parsed = new URL(targetUrl);
+    if (!/^https?:$/.test(parsed.protocol)) {
+      throw new Error(`Unsupported protocol for ${targetUrl}`);
+    }
+
+    const origin = window.location.origin;
+    if (!origin || origin === 'null') {
+      throw new Error('Local helper server unavailable. Run npm run dev and reload from http://localhost:3000.');
+    }
+
+    const endpoint = new URL('/api/fetch', origin);
+    endpoint.searchParams.set('url', targetUrl);
+    endpoint.searchParams.set('_ts', Date.now().toString());
+    return endpoint.toString();
+  }
+
   function renderLogs() {
     elements.logList.innerHTML = state.logs
       .slice(-120)
       .map(
         (entry) => `
-          <li class="log-entry" data-type="${entry.type}">
+          <li class="log-entry ${entry.type}" data-type="${entry.type}">
             <span>${escapeHtml(entry.message)}</span>
             <time datetime="${entry.timestamp}">${formatTimestamp(entry.timestamp)}</time>
           </li>
@@ -1023,6 +2503,21 @@
     };
     state.logs.push(entry);
     renderLogs();
+  }
+
+  function showToast(message, variant = 'success') {
+    if (!elements.toast) return;
+    const toast = elements.toast;
+    toast.classList.remove('success', 'error', 'warning');
+    toast.textContent = message;
+    toast.classList.add(variant);
+    toast.classList.add('show');
+    if (state.toastTimer) {
+      clearTimeout(state.toastTimer);
+    }
+    state.toastTimer = setTimeout(() => {
+      toast.classList.remove('show');
+    }, 3200);
   }
 
   function updateExports() {
