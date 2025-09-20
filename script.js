@@ -15,10 +15,23 @@
     results: [],
     logs: [],
     documents: [],
-    selectedSections: new Map()
+    selectedSections: new Map(),
+    sitemap: {
+      loading: false,
+      error: '',
+      tree: [],
+      source: 'https://www.adxs.org',
+      fetchedAt: null,
+      openNodes: new Set()
+    }
   };
 
+  const SITEMAP_SELECTION_KEY = 'sitemap';
+  const RESULT_SELECTION_PREFIX = 'result:';
+
   const elements = {};
+
+  state.selectedSections.set(SITEMAP_SELECTION_KEY, new Set());
 
   document.addEventListener('DOMContentLoaded', () => {
     cacheElements();
@@ -31,7 +44,9 @@
     renderLogs();
     renderDocumentBuilder();
     renderDocuments();
+    renderSitemap();
     updateProxyWarning();
+    loadSitemap();
   });
 
   function cacheElements() {
@@ -75,6 +90,9 @@
     elements.clearSelectionBtn = document.getElementById('clearSelectionBtn');
     elements.documentsEmpty = document.getElementById('documentsEmpty');
     elements.documentList = document.getElementById('documentList');
+    elements.sitemapStatus = document.getElementById('sitemapStatus');
+    elements.sitemapTree = document.getElementById('sitemapTree');
+    elements.refreshSitemap = document.getElementById('refreshSitemap');
   }
 
   function attachEventListeners() {
@@ -125,6 +143,16 @@
     if (elements.documentList) {
       elements.documentList.addEventListener('click', handleDocumentListClick);
     }
+    if (elements.refreshSitemap) {
+      elements.refreshSitemap.addEventListener('click', () => loadSitemap());
+    }
+    if (elements.sitemapTree) {
+      elements.sitemapTree.addEventListener('change', handleSitemapSelectionChange);
+      elements.sitemapTree.addEventListener('toggle', handleSitemapToggle, true);
+    }
+    if (elements.baseUrl) {
+      elements.baseUrl.addEventListener('blur', handleBaseUrlBlur);
+    }
   }
 
   function setMode(mode) {
@@ -157,24 +185,55 @@
       return;
     }
 
-    state.baseUrl = (elements.baseUrl.value || 'https://www.adxs.org').trim().replace(/\/$/, '');
-    const rawPaths = elements.paths.value
+    const baseValue = elements.baseUrl?.value || state.baseUrl || 'https://www.adxs.org';
+    const sanitisedBase = sanitiseBaseUrl(baseValue);
+    state.baseUrl = sanitisedBase;
+    state.sitemap.source = sanitisedBase;
+    if (elements.baseUrl) {
+      elements.baseUrl.value = sanitisedBase;
+    }
+
+    const manualPaths = elements.paths.value
       .split(/\n+/)
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
 
-    if (rawPaths.length === 0) {
-      rawPaths.push('');
+    const sitemapSelection = Array.from(getSitemapSelection()).filter((value) => value && value.length > 0);
+    const usingSitemap = sitemapSelection.length > 0;
+    let queuePaths = usingSitemap ? sitemapSelection : manualPaths.slice();
+    const queueMessages = [];
+
+    if (usingSitemap) {
+      queueMessages.push({
+        message: `Building queue from ${sitemapSelection.length} sitemap selection${sitemapSelection.length === 1 ? '' : 's'}.`,
+        type: 'info'
+      });
+    } else if (queuePaths.length > 0) {
+      queueMessages.push({
+        message: `Using ${queuePaths.length} manual path${queuePaths.length === 1 ? '' : 's'} for this session.`,
+        type: 'info'
+      });
     }
 
+    if (queuePaths.length === 0) {
+      queuePaths = [''];
+      queueMessages.push({
+        message: 'No sitemap entries or manual paths supplied. Defaulting to the base URL.',
+        type: 'warning'
+      });
+    }
+
+    let singleModeWarning = null;
     let queue;
     if (state.mode === 'single') {
-      queue = [buildUrl(rawPaths[0])];
-      if (rawPaths.length > 1) {
-        log('Single page mode only scrapes the first path provided. Additional entries were ignored.', 'warning');
+      queue = [buildUrl(queuePaths[0])];
+      if (queuePaths.length > 1) {
+        singleModeWarning = usingSitemap
+          ? 'Single page mode only scrapes the first sitemap entry selected. Additional selections were ignored.'
+          : 'Single page mode only scrapes the first path provided. Additional entries were ignored.';
       }
     } else {
-      queue = rawPaths.map((path) => buildUrl(path));
+      queue = queuePaths.map((path) => buildUrl(path));
     }
 
     state.queue = queue;
@@ -183,9 +242,17 @@
     state.results = [];
     state.logs = [];
     state.documents = [];
-    state.selectedSections = new Map();
+    resetResultSelections();
     state.isRunning = true;
     state.isPaused = false;
+
+    queueMessages.forEach((entry) => log(entry.message, entry.type || 'info'));
+    if (singleModeWarning) {
+      log(singleModeWarning, 'warning');
+    }
+    if (usingSitemap && manualPaths.length > 0) {
+      log('Manual paths are ignored when sitemap selections are present.', 'info');
+    }
 
     elements.pauseBtn.disabled = false;
     elements.pauseBtn.textContent = 'Pause';
@@ -217,6 +284,454 @@
     }
     const cleanedPath = path.startsWith('/') ? path : `/${path}`;
     return `${state.baseUrl}${cleanedPath}`;
+  }
+
+  async function loadSitemap(baseOverride) {
+    const origin = window.location.origin;
+    if (!origin || origin === 'null') {
+      state.sitemap.error =
+        'Run the helper server (npm run dev) and reload from http://localhost:3000 to load the sitemap.';
+      state.sitemap.loading = false;
+      renderSitemap();
+      return;
+    }
+
+    const baseCandidate =
+      baseOverride ||
+      elements.baseUrl?.value ||
+      state.sitemap.source ||
+      state.baseUrl ||
+      'https://www.adxs.org';
+    const base = sanitiseBaseUrl(baseCandidate);
+    const targetLabel = `${base}/en/sitemap`;
+
+    state.sitemap.loading = true;
+    state.sitemap.error = '';
+    state.sitemap.source = base;
+    renderSitemap();
+    log(`Loading sitemap from ${targetLabel}…`, 'info');
+
+    try {
+      const endpoint = new URL('/api/sitemap', origin);
+      endpoint.searchParams.set('base', base);
+      endpoint.searchParams.set('_ts', Date.now().toString());
+
+      const response = await fetch(endpoint.toString(), {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store'
+      });
+
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (error) {
+        payload = null;
+      }
+
+      if (!response.ok) {
+        const message =
+          (payload && (payload.error || payload.statusText)) || `${response.status} ${response.statusText}`;
+        throw new Error(message);
+      }
+
+      const html = payload?.html;
+      if (!html) {
+        throw new Error('The sitemap response did not include markup.');
+      }
+
+      const sitemapUrl = payload?.url || targetLabel;
+      const parsedTree = parseSitemap(html, sitemapUrl);
+      state.sitemap.tree = parsedTree;
+      state.sitemap.fetchedAt = payload?.fetchedAt || new Date().toISOString();
+      state.sitemap.error = '';
+      state.sitemap.openNodes = new Set();
+      pruneSitemapSelection();
+      state.sitemap.loading = false;
+      renderSitemap();
+
+      const available = new Set();
+      parsedTree.forEach((node) => collectSitemapPaths(node, available));
+      log(
+        `Sitemap loaded with ${available.size} page${available.size === 1 ? '' : 's'} from ${sitemapUrl}.`,
+        'success'
+      );
+    } catch (error) {
+      state.sitemap.loading = false;
+      state.sitemap.error = error?.message || 'Unable to load sitemap. Use manual paths or retry.';
+      renderSitemap();
+      log(`Failed to load sitemap: ${state.sitemap.error}`, 'error');
+    }
+  }
+
+  function renderSitemap() {
+    if (!elements.sitemapTree || !elements.sitemapStatus) {
+      return;
+    }
+
+    if (elements.refreshSitemap) {
+      elements.refreshSitemap.disabled = state.sitemap.loading;
+    }
+
+    captureOpenSitemapNodes();
+
+    const { loading, error, tree, fetchedAt, source } = state.sitemap;
+    const selection = getSitemapSelection();
+    let statusClass = 'sitemap-status';
+    let statusMessage = '';
+
+    if (loading) {
+      statusClass += ' loading';
+      statusMessage = `Loading sitemap from ${source || state.baseUrl}…`;
+    } else if (error) {
+      statusClass += ' error';
+      statusMessage = error;
+    } else if (tree.length > 0) {
+      statusClass += ' success';
+      const selectedCount = selection.size;
+      const timestamp = fetchedAt ? new Date(fetchedAt) : null;
+      const timePart = timestamp
+        ? timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : 'Loaded';
+      statusMessage = `${timePart} • ${tree.length} section${tree.length === 1 ? '' : 's'} • ${selectedCount} page${
+        selectedCount === 1 ? '' : 's'
+      } selected`;
+    } else {
+      statusMessage = 'Sitemap data will appear once the helper server responds.';
+    }
+
+    elements.sitemapStatus.className = statusClass;
+    elements.sitemapStatus.textContent = statusMessage;
+
+    if (loading && tree.length > 0) {
+      applySitemapIndeterminateStates();
+      return;
+    }
+
+    if (error && tree.length > 0) {
+      applySitemapIndeterminateStates();
+      return;
+    }
+
+    if (!tree.length) {
+      const placeholder = loading
+        ? '<p class="sitemap-placeholder">Fetching sitemap…</p>'
+        : '<p class="sitemap-placeholder">No sitemap entries available. Use manual paths or retry.</p>';
+      elements.sitemapTree.innerHTML = placeholder;
+      return;
+    }
+
+    const annotated = annotateSitemapTree(tree, selection);
+    const openNodes = state.sitemap.openNodes || new Set();
+    const markup = annotated.map((node) => renderSitemapNode(node, 0, openNodes)).join('');
+    elements.sitemapTree.innerHTML = markup;
+    applySitemapIndeterminateStates();
+  }
+
+  function handleSitemapSelectionChange(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || target.type !== 'checkbox') {
+      return;
+    }
+    const container = target.closest('[data-node-key]');
+    if (!container) {
+      return;
+    }
+
+    if (target.dataset.nodeGroup === 'true') {
+      cascadeSitemapSelection(container, target.checked, target);
+    }
+
+    syncSitemapSelection();
+    renderSitemap();
+  }
+
+  function cascadeSitemapSelection(container, checked, root) {
+    if (!container) return;
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach((input) => {
+      if (input === root) return;
+      input.checked = checked;
+    });
+  }
+
+  function syncSitemapSelection() {
+    const selection = getSitemapSelection();
+    selection.clear();
+    if (!elements.sitemapTree) {
+      return;
+    }
+    const checkboxes = elements.sitemapTree.querySelectorAll('input[type="checkbox"][data-node-path]');
+    checkboxes.forEach((input) => {
+      if (input.checked) {
+        selection.add(input.dataset.nodePath);
+      }
+    });
+  }
+
+  function getSitemapSelection() {
+    let selection = state.selectedSections.get(SITEMAP_SELECTION_KEY);
+    if (!selection) {
+      selection = new Set();
+      state.selectedSections.set(SITEMAP_SELECTION_KEY, selection);
+    }
+    return selection;
+  }
+
+  function pruneSitemapSelection() {
+    const selection = getSitemapSelection();
+    if (selection.size === 0) return;
+    const available = new Set();
+    state.sitemap.tree.forEach((node) => collectSitemapPaths(node, available));
+    Array.from(selection).forEach((path) => {
+      if (!available.has(path)) {
+        selection.delete(path);
+      }
+    });
+  }
+
+  function collectSitemapPaths(node, accumulator) {
+    if (!node) return;
+    if (node.path) {
+      accumulator.add(node.path);
+    }
+    if (node.children) {
+      node.children.forEach((child) => collectSitemapPaths(child, accumulator));
+    }
+  }
+
+  function annotateSitemapTree(nodes, selection) {
+    return nodes.map((node) => annotateSitemapNode(node, selection));
+  }
+
+  function annotateSitemapNode(node, selection) {
+    const annotatedChildren = (node.children || []).map((child) => annotateSitemapNode(child, selection));
+    const selectable = Boolean(node.path);
+    const selected = selectable && selection.has(node.path);
+    const selectableCount =
+      (selectable ? 1 : 0) + annotatedChildren.reduce((sum, child) => sum + child.selectableCount, 0);
+    const selectedCount =
+      (selected ? 1 : 0) + annotatedChildren.reduce((sum, child) => sum + child.selectedCount, 0);
+    const anySelected = selectedCount > 0;
+    const allSelected = selectableCount > 0 && selectedCount === selectableCount;
+
+    return {
+      ...node,
+      selectable,
+      selected,
+      selectableCount,
+      selectedCount,
+      anySelected,
+      allSelected,
+      children: annotatedChildren
+    };
+  }
+
+  function renderSitemapNode(node, depth, openNodes) {
+    const hasChildren = node.children && node.children.length > 0;
+    const isGroup = !node.selectable && hasChildren;
+    const isChecked = node.selectable ? node.selected : node.allSelected;
+    const isIndeterminate = hasChildren && node.anySelected && !node.allSelected;
+    const checkboxAttributes = [
+      'type="checkbox"',
+      `data-node-key="${escapeHtml(node.key)}"`,
+      `data-node-depth="${depth}"`,
+      `data-node-group="${isGroup ? 'true' : 'false'}"`
+    ];
+    if (node.path) {
+      checkboxAttributes.push(`data-node-path="${escapeHtml(node.path)}"`);
+    }
+    if (isChecked) {
+      checkboxAttributes.push('checked');
+    }
+    if (isIndeterminate) {
+      checkboxAttributes.push('data-indeterminate="true"');
+    }
+    if (!node.selectable && !hasChildren) {
+      checkboxAttributes.push('disabled');
+    }
+
+    const checkboxHtml = `<input ${checkboxAttributes.join(' ')}>`;
+    const labelHtml = `<label class="sitemap-item">${checkboxHtml}<span>${escapeHtml(node.title)}</span></label>`;
+
+    if (hasChildren) {
+      const shouldOpen = openNodes.has(node.key) || node.anySelected || depth === 0;
+      const openAttr = shouldOpen ? ' open' : '';
+      const childrenHtml = node.children
+        .map((child) => renderSitemapNode(child, depth + 1, openNodes))
+        .join('');
+      return `<details class="sitemap-branch" data-node-key="${escapeHtml(node.key)}"${openAttr}><summary>${labelHtml}</summary><div class="sitemap-children">${childrenHtml}</div></details>`;
+    }
+
+    return `<div class="sitemap-leaf" data-node-key="${escapeHtml(node.key)}">${labelHtml}</div>`;
+  }
+
+  function applySitemapIndeterminateStates() {
+    if (!elements.sitemapTree) return;
+    const checkboxes = elements.sitemapTree.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach((input) => {
+      if (input.dataset.indeterminate === 'true') {
+        input.indeterminate = true;
+      } else {
+        input.indeterminate = false;
+      }
+    });
+  }
+
+  function captureOpenSitemapNodes() {
+    if (!elements.sitemapTree || !state.sitemap.openNodes) {
+      return;
+    }
+    const openNodes = new Set();
+    elements.sitemapTree.querySelectorAll('details[data-node-key]').forEach((details) => {
+      const key = details.dataset.nodeKey;
+      if (!key) return;
+      if (details.open) {
+        openNodes.add(key);
+      }
+    });
+    state.sitemap.openNodes = openNodes;
+  }
+
+  function handleSitemapToggle(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLDetailsElement)) {
+      return;
+    }
+    const key = target.dataset.nodeKey;
+    if (!key) {
+      return;
+    }
+    if (!state.sitemap.openNodes) {
+      state.sitemap.openNodes = new Set();
+    }
+    if (target.open) {
+      state.sitemap.openNodes.add(key);
+    } else {
+      state.sitemap.openNodes.delete(key);
+    }
+  }
+
+  function handleBaseUrlBlur() {
+    if (!elements.baseUrl) return;
+    const sanitised = sanitiseBaseUrl(elements.baseUrl.value);
+    if (elements.baseUrl.value !== sanitised) {
+      elements.baseUrl.value = sanitised;
+    }
+    if (state.sitemap.source !== sanitised) {
+      loadSitemap(sanitised);
+    }
+  }
+
+  function sanitiseBaseUrl(value) {
+    const fallback = 'https://www.adxs.org';
+    const trimmed = (value || '').trim();
+    try {
+      const parsed = new URL(trimmed || fallback);
+      parsed.hash = '';
+      const normalised = parsed.toString().replace(/\/$/, '');
+      return normalised || fallback;
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  function parseSitemap(html, baseUrl) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const main = doc.querySelector('main');
+    if (!main) {
+      throw new Error('Sitemap markup missing expected structure.');
+    }
+
+    const headings = Array.from(main.querySelectorAll('h2'));
+    if (headings.length === 0) {
+      throw new Error('Sitemap markup did not include any sections.');
+    }
+
+    const tree = [];
+    headings.forEach((heading, index) => {
+      const title = normaliseWhitespace(heading.textContent || '');
+      if (!title) {
+        return;
+      }
+      let sibling = heading.nextElementSibling;
+      while (sibling && sibling.tagName !== 'UL') {
+        sibling = sibling.nextElementSibling;
+      }
+      if (!sibling || sibling.tagName !== 'UL') {
+        return;
+      }
+      const children = parseSitemapList(sibling, baseUrl, `section-${index}`);
+      if (children.length === 0) {
+        return;
+      }
+      tree.push({
+        key: `heading:${slugifyForId(title)}:${index}`,
+        title,
+        path: '',
+        children
+      });
+    });
+
+    if (tree.length === 0) {
+      throw new Error('Sitemap markup did not contain any navigable entries.');
+    }
+
+    return tree;
+  }
+
+  function parseSitemapList(list, baseUrl, keyPrefix) {
+    const items = [];
+    const listItems = Array.from(list.querySelectorAll(':scope > li'));
+    listItems.forEach((li, index) => {
+      const anchor = li.querySelector(':scope > a');
+      const directText = anchor?.textContent || li.firstChild?.textContent || '';
+      const title = normaliseWhitespace(directText);
+      if (!title) {
+        return;
+      }
+
+      let path = '';
+      if (anchor) {
+        const href = anchor.getAttribute('href') || '';
+        path = normaliseSitemapHref(href, baseUrl);
+      }
+
+      const childList = li.querySelector(':scope > ul');
+      const children = childList ? parseSitemapList(childList, baseUrl, `${keyPrefix}-${index}`) : [];
+      if (!path && children.length === 0) {
+        return;
+      }
+
+      const key = path ? `path:${path}` : `group:${slugifyForId(title)}:${keyPrefix}-${index}`;
+      items.push({ key, title, path, children });
+    });
+    return items;
+  }
+
+  function normaliseSitemapHref(href, baseUrl) {
+    if (!href) {
+      return '';
+    }
+    try {
+      const resolved = new URL(href, baseUrl);
+      const base = new URL(baseUrl);
+      if (resolved.host !== base.host) {
+        return '';
+      }
+      resolved.hash = '';
+      return resolved.pathname + resolved.search;
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function slugifyForId(value) {
+    return normaliseWhitespace(value)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80) || 'node';
   }
 
   function togglePause() {
@@ -1078,6 +1593,37 @@
       .join('');
   }
 
+  function resultSelectionKey(pageIndex) {
+    return `${RESULT_SELECTION_PREFIX}${pageIndex}`;
+  }
+
+  function getResultSelection(pageIndex) {
+    return state.selectedSections.get(resultSelectionKey(pageIndex)) || null;
+  }
+
+  function ensureResultSelection(pageIndex) {
+    const key = resultSelectionKey(pageIndex);
+    let selection = state.selectedSections.get(key);
+    if (!selection) {
+      selection = new Set();
+      state.selectedSections.set(key, selection);
+    }
+    return selection;
+  }
+
+  function deleteResultSelection(pageIndex) {
+    state.selectedSections.delete(resultSelectionKey(pageIndex));
+  }
+
+  function isResultSelectionKey(key) {
+    return typeof key === 'string' && key.startsWith(RESULT_SELECTION_PREFIX);
+  }
+
+  function resetResultSelections() {
+    const sitemapSelection = getSitemapSelection();
+    state.selectedSections = new Map([[SITEMAP_SELECTION_KEY, sitemapSelection]]);
+  }
+
   function renderDocumentBuilder() {
     if (!elements.documentBuilder || !elements.documentsEmpty || !elements.documentActions) {
       return;
@@ -1098,14 +1644,15 @@
 
     const markup = state.results
       .map((result, index) => {
-        const selectedIds = state.selectedSections.get(index) || new Set();
+        const selectedIds = getResultSelection(index);
+        const selectedCount = selectedIds ? selectedIds.size : 0;
         const sectionMarkup = result.sections
           .map(
             (section) => `
               <div class="doc-section">
                 <label>
                   <input type="checkbox" data-page-index="${index}" data-section-id="${escapeHtml(section.id)}" ${
-              selectedIds.has(section.id) ? 'checked' : ''
+              selectedIds?.has(section.id) ? 'checked' : ''
             }>
                   <span>${escapeHtml(section.heading)}</span>
                 </label>
@@ -1114,8 +1661,8 @@
           )
           .join('');
         const sectionLabel = `${result.stats.sections} section${result.stats.sections === 1 ? '' : 's'}`;
-        const selectedLabel = `${selectedIds.size} selected`;
-        const openAttr = selectedIds.size > 0 ? ' open' : '';
+        const selectedLabel = `${selectedCount} selected`;
+        const openAttr = selectedCount > 0 ? ' open' : '';
         return `
           <details class="doc-source" data-page-index="${index}"${openAttr}>
             <summary data-page-index="${index}">
@@ -1147,18 +1694,13 @@
       return;
     }
 
-    let selection = state.selectedSections.get(pageIndex);
-    if (!selection) {
-      selection = new Set();
-      state.selectedSections.set(pageIndex, selection);
-    }
-
+    const selection = ensureResultSelection(pageIndex);
     if (target.checked) {
       selection.add(sectionId);
     } else {
       selection.delete(sectionId);
       if (selection.size === 0) {
-        state.selectedSections.delete(pageIndex);
+        deleteResultSelection(pageIndex);
       }
     }
 
@@ -1170,7 +1712,7 @@
     const meta = elements.documentBuilder.querySelector(
       `summary [data-role="selected"][data-page-index="${pageIndex}"]`
     );
-    const selection = state.selectedSections.get(pageIndex);
+    const selection = getResultSelection(pageIndex);
     const count = selection ? selection.size : 0;
     if (meta) {
       meta.textContent = `${count} selected`;
@@ -1178,11 +1720,12 @@
   }
 
   function clearSelectedSections() {
-    if (state.selectedSections.size === 0) {
+    const resultKeys = Array.from(state.selectedSections.keys()).filter(isResultSelectionKey);
+    if (resultKeys.length === 0) {
       log('No sections are currently selected.', 'info');
       return;
     }
-    state.selectedSections.clear();
+    resultKeys.forEach((key) => state.selectedSections.delete(key));
     renderDocumentBuilder();
     renderDocuments();
     log('Cleared the current section selection.', 'info');
@@ -1191,7 +1734,7 @@
   function collectSelectedSections() {
     const collected = [];
     state.results.forEach((result, pageIndex) => {
-      const selection = state.selectedSections.get(pageIndex);
+      const selection = getResultSelection(pageIndex);
       if (!selection || selection.size === 0) {
         return;
       }

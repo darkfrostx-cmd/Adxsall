@@ -62,10 +62,22 @@
           </label>
         </fieldset>
 
+        <div class="field sitemap-field" aria-label="Sitemap selection">
+          <div class="sitemap-header">
+            <div>
+              <span class="field-label">Sitemap selection</span>
+              <p class="field-hint">Pick pages from the ADXS site tree to seed the scrape queue. Manual paths are only used when nothing is selected.</p>
+            </div>
+            <button type="button" class="sitemap-refresh" id="refreshSitemap">Reload sitemap</button>
+          </div>
+          <div id="sitemapStatus" class="sitemap-status" role="status" aria-live="polite"></div>
+          <div id="sitemapTree" class="sitemap-tree" role="tree" aria-label="ADXS sitemap"></div>
+        </div>
+
         <label class="field">
           <span class="field-label">Paths to scrape</span>
           <textarea id="paths" rows="6" placeholder="/wiki/some-article\n/wiki/another-article"></textarea>
-          <small class="field-hint">Enter one relative path per line. Leave blank for the base URL.</small>
+          <small class="field-hint">Enter one relative path per line. Leave blank to scrape the base URL or rely on sitemap selections.</small>
         </label>
 
         <div class="control-bar">

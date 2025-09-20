@@ -36,8 +36,9 @@ Visit `http://localhost:3000` in your browser. The warning banner disappears onc
    - *Single page* – fetches only the first path (or the base URL when no paths are supplied).
    - *Section crawl* – walks every path you enter, ideal for a curated set of section URLs.
    - *Batch list* – processes each path in order with progress tracking for longer lists.
-3. **Paths to scrape** – enter one relative path per line (for example `/en/page/560/6-guidelines-for-diagnostics`). Leave the field empty to process the base URL.
-4. **Capture options** – keep inline citations, tooltip text (including ADXS `data-tippy-content` popovers), and footnotes enabled to maximise the validation coverage.
+3. **Capture options** – keep inline citations, tooltip text (including ADXS `data-tippy-content` popovers), and footnotes enabled to maximise the validation coverage.
+4. **Sitemap selection** – the configuration panel now loads the `/en` navigation tree via the helper server. Use the collapsible checkboxes to stage the pages you want to scrape; the **Reload sitemap** button re-fetches it if you change the base URL. If the fetch fails, the status message explains why and the existing tree stays in place so you can retry.
+5. **Paths to scrape** – enter one relative path per line (for example `/en/page/560/6-guidelines-for-diagnostics`). Manual paths are only used when no sitemap selections are checked; otherwise they are ignored.
 
 ## 5. Run and monitor
 
@@ -70,5 +71,6 @@ Exports reflect the current batch in memory. Start a new scrape to reset the dat
 
 - **“Start the helper server…” warning** – you opened `index.html` directly. Run `npm run dev` and reload via `http://localhost:3000`.
 - **Fetch errors or 403s** – confirm the helper server is running, your terminal shows proxy hits, and the target URL is correct.
+- **Sitemap load failures** – the status banner in the configuration panel shows the error message when the tree cannot be fetched. Check the helper server logs for `[sitemap]` errors, confirm the base URL is allowed, then use **Reload sitemap** once the issue is resolved.
 - **Missing tooltips in validation** – leave the “Tooltip text” option enabled; the validator expects `data-tippy-content` captures to link inline citations with their popover text.
 - **Large batches** – the scraper inserts a short 250 ms delay between requests to avoid overwhelming ADXS.org. Adjust your path list to control throughput.
