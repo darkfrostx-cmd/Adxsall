@@ -4,6 +4,8 @@ An interactive browser application for harvesting structured content from the AD
 
 > **Why a helper server?** ADXS.org does not send permissive CORS headers, so browsers block direct cross-origin `fetch` calls. The included Node helper server proxies requests locally, giving the front-end safe access to the remote HTML.
 
+If you are just getting started, follow the [Quick Start Guide](GUIDE.md) for beginner-friendly setup instructions on Windows, macOS, Linux, and Android (Termux).
+
 ## Prerequisites
 
 - [Node.js 18+](https://nodejs.org/) (includes `npm` and the global `fetch` API used by the proxy)
@@ -23,7 +25,9 @@ This step pulls in Express (for the proxy/static server) and its small dependenc
 npm run dev
 ```
 
-The server listens on [http://localhost:3000](http://localhost:3000), serves the UI assets, and exposes `/api/fetch` for proxied ADXS requests. Leave this terminal window running while you use the app.
+The server listens on [http://localhost:3000](http://localhost:3000), serves the UI assets, and exposes `/api/fetch` for proxied ADXS requests. It binds to all local interfaces, so you can also reach it from other devices on your network by replacing `localhost` with your machine's IP address. Leave this terminal window running while you use the app.
+
+> **Mobile tip:** Termux on Android can run the helper server directly on your phone. The interface is fully responsive and supports narrow screens.
 
 ## 3. Open the UI
 
