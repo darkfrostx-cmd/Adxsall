@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Adxsall Citation Scraper</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="panel panel--controls">
+        <h1 class="panel__title">Citation &amp; Footnote Scraper</h1>
+        <p class="panel__description">
+          Paste article HTML below, then run the scraper to extract citations,
+          validate cross-references, and review the generated export payload.
+        </p>
+        <label class="panel__label" for="source-input">Article HTML</label>
+        <textarea
+          id="source-input"
+          class="panel__textarea"
+          placeholder="Paste the article markup you scraped or copied from the source page..."
+        ></textarea>
+        <div class="panel__actions">
+          <button id="scrape-button" class="button">Scrape &amp; Validate</button>
+          <button id="export-button" class="button button--primary" disabled>
+            Export Report
+          </button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel__header">
+          <h2 class="panel__title">Content Preview</h2>
+          <p class="panel__subtitle">
+            Sanitised body content captured during scraping. Footnote sections are
+            included for reference.
+          </p>
+        </header>
+        <div id="content-preview" class="panel__body panel__body--scroll"></div>
+      </section>
+
+      <section class="panel">
+        <header class="panel__header">
+          <h2 class="panel__title">Validation</h2>
+          <p class="panel__subtitle">
+            Automated checks linking citations, tooltips, and footnotes. Messages are
+            grouped by severity so you can address blockers first.
+          </p>
+        </header>
+        <div id="validation-pane" class="panel__body">
+          <div id="validation-summary" class="validation-summary validation-summary--empty">
+            <p>No validation results yet. Run the scraper to generate a report.</p>
+          </div>
+          <ul id="validation-messages" class="message-list"></ul>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel__header">
+          <h2 class="panel__title">Validation Export Preview</h2>
+          <p class="panel__subtitle">
+            JSON and Markdown payloads embed the validation results so downstream tools
+            can verify linkage integrity.
+          </p>
+        </header>
+        <div class="panel__body">
+          <details open class="export-preview">
+            <summary>JSON</summary>
+            <textarea id="export-json" class="export-preview__textarea" readonly></textarea>
+          </details>
+          <details class="export-preview">
+            <summary>Markdown</summary>
+            <textarea id="export-markdown" class="export-preview__textarea" readonly></textarea>
+          </details>
+        </div>
+      </section>
+    </main>
+    <script src="script.js"></script>
+  </body>
+</html>
