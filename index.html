@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ADXS Knowledge Scraper</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="branding">
+      <h1>ADXS Knowledge Scraper</h1>
+      <p>Harvest sections, citations, tooltips, and footnotes from ADXS.org content for downstream analysis.</p>
+    </div>
+    <div class="header-meta">
+      <span class="badge">v1.0</span>
+      <span class="status-pill" id="statusPill">Idle</span>
+    </div>
+  </header>
+
+  <main class="app-layout">
+    <section class="panel configuration" aria-labelledby="configuration-heading">
+      <div class="panel-header">
+        <h2 id="configuration-heading">Configuration</h2>
+        <p>Define the scraping batch, select scraping modes, and adjust content capture options.</p>
+      </div>
+      <div class="panel-body">
+        <label class="field">
+          <span class="field-label">Base URL</span>
+          <input type="url" id="baseUrl" value="https://www.adxs.org" placeholder="https://www.adxs.org" required>
+        </label>
+
+        <div class="field">
+          <span class="field-label">Scraping mode</span>
+          <div class="mode-toggle" role="group" aria-label="Scraping mode">
+            <button type="button" class="mode-button active" data-mode="single">Single page</button>
+            <button type="button" class="mode-button" data-mode="section">Section crawl</button>
+            <button type="button" class="mode-button" data-mode="batch">Batch list</button>
+          </div>
+        </div>
+
+        <fieldset class="field options" aria-label="Capture options">
+          <legend>Capture options</legend>
+          <label>
+            <input type="checkbox" id="includeCitations" checked>
+            Inline citations
+          </label>
+          <label>
+            <input type="checkbox" id="includeTooltips" checked>
+            Tooltip text
+          </label>
+          <label>
+            <input type="checkbox" id="includeFootnotes" checked>
+            Footnotes &amp; endnotes
+          </label>
+        </fieldset>
+
+        <label class="field">
+          <span class="field-label">Paths to scrape</span>
+          <textarea id="paths" rows="6" placeholder="/wiki/some-article\n/wiki/another-article"></textarea>
+          <small class="field-hint">Enter one relative path per line. Leave blank for the base URL.</small>
+        </label>
+
+        <div class="control-bar">
+          <button type="button" class="control primary" id="startBtn">Start</button>
+          <button type="button" class="control" id="pauseBtn" disabled>Pause</button>
+          <button type="button" class="control" id="stopBtn" disabled>Stop</button>
+        </div>
+
+        <div class="progress-wrapper" aria-live="polite">
+          <div class="progress-bar" id="progressBar"></div>
+          <div class="progress-meta">
+            <span id="progressText">Awaiting configuration</span>
+            <span id="batchCounter">0 / 0</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel results" aria-labelledby="results-heading">
+      <div class="panel-header results-header">
+        <div>
+          <h2 id="results-heading">Results</h2>
+          <p>Preview captured content, monitor statistics, and review the scraping log.</p>
+        </div>
+        <div class="exports">
+          <button type="button" class="export" data-export="json">Export JSON</button>
+          <button type="button" class="export" data-export="markdown">Export Markdown</button>
+          <button type="button" class="export" data-export="html">Export HTML</button>
+          <button type="button" class="export" data-export="bibtex">Export BibTeX</button>
+          <button type="button" class="export" id="copyClipboard">Copy summary</button>
+        </div>
+      </div>
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" aria-selected="true" aria-controls="previewPane" class="tab active" data-tab="preview">Preview</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="statsPane" class="tab" data-tab="stats">Statistics</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="logsPane" class="tab" data-tab="logs">Logs</button>
+      </div>
+      <div class="tab-panels">
+        <section id="previewPane" class="tab-panel active" role="tabpanel">
+          <div class="empty-state" id="previewEmpty">No pages scraped yet. Start a session to preview content.</div>
+          <div id="previewContent" class="preview-grid" hidden></div>
+        </section>
+        <section id="statsPane" class="tab-panel" role="tabpanel" aria-hidden="true">
+          <dl class="stats-grid">
+            <div>
+              <dt>Pages scraped</dt>
+              <dd id="statPages">0</dd>
+            </div>
+            <div>
+              <dt>Sections captured</dt>
+              <dd id="statSections">0</dd>
+            </div>
+            <div>
+              <dt>Inline citations</dt>
+              <dd id="statCitations">0</dd>
+            </div>
+            <div>
+              <dt>Tooltip notes</dt>
+              <dd id="statTooltips">0</dd>
+            </div>
+            <div>
+              <dt>Footnotes</dt>
+              <dd id="statFootnotes">0</dd>
+            </div>
+            <div>
+              <dt>Total words</dt>
+              <dd id="statWords">0</dd>
+            </div>
+          </dl>
+        </section>
+        <section id="logsPane" class="tab-panel" role="tabpanel" aria-hidden="true">
+          <ul id="logList" class="log-list"></ul>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>Built for rapid exploration of the ADXS knowledge base. All data remains on this device until exported.</p>
+  </footer>
+
+  <script src="script.js" defer></script>
+</body>
+</html>
