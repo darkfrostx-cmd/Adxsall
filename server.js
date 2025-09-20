@@ -3,6 +3,7 @@ const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
 const ROOT = path.resolve(__dirname || '.');
 
 const DEFAULT_ALLOWED = ['www.adxs.org', 'adxs.org'];
@@ -119,7 +120,11 @@ app.get('/api/sitemap', async (req, res) => {
 
 app.use(express.static(ROOT));
 
-app.listen(PORT, () => {
-  console.log(`ADXS helper server running on http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  const displayedHost = HOST === '0.0.0.0' || HOST === '::' ? 'localhost' : HOST;
+  console.log(`ADXS helper server running on http://${displayedHost}:${PORT}`);
+  if (HOST === '0.0.0.0' || HOST === '::') {
+    console.log('Tip: Share this server with other devices on your network using your machine\'s IP address.');
+  }
   console.log(`Allowed hosts: ${Array.from(allowedHosts).join(', ') || 'none'}`);
 });
