@@ -1,0 +1,9 @@
+{
+  "name": "adxsall-scraper",
+  "version": "1.0.0",
+  "description": "Citation scraping demo with validation reporting",
+  "private": true,
+  "scripts": {
+    "test": "node --check script.js"
+  }
+}
