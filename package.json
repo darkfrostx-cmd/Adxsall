@@ -4,7 +4,8 @@
   "description": "Interactive ADXS.org scraper UI with local proxy helper",
   "main": "server.js",
   "scripts": {
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "dump:context": "node tools/dump-context.js"
   },
   "dependencies": {
     "express": "^4.19.2"

@@ -71,6 +71,20 @@ The buttons in the **Results** header generate full-batch exports:
 
 Exports reflect the current batch in memory. Start a new scrape to reset the dataset.
 
+## 8. Capture a workspace context snapshot
+
+Generate a Markdown dump of the project (including recent Git metadata and the contents of each source file) with:
+
+```bash
+npm run dump:context
+```
+
+The script writes to `context-dump.md` in the project root and records the generation timestamp, directories it visited, the la
+test `git status --short`, and the last 20 commits from `git log --oneline`.
+
+To keep the export focused on hand-edited assets, the crawler deliberately skips the `.git`, `node_modules`, `dist`, `build`,
+`.next`, `out`, `.cache`, `coverage`, `tmp`, and `logs` directories, along with the generated `context-dump.md` file itself.
+
 ## Troubleshooting
 
 - **“Start the helper server…” warning** – you opened `index.html` directly. Run `npm run dev` and reload via `http://localhost:3000`.
