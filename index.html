@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Citation Scraper Control Room</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="app-header__inner">
+        <div class="branding">
+          <span class="branding__mark" aria-hidden="true">⧉</span>
+          <div class="branding__copy">
+            <h1>Citation Scraper Control Room</h1>
+            <p>Compose scholarly URLs, collect citations, and validate references before exporting.</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <span class="version-pill" aria-label="Release channel">Prototype</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="app-layout" aria-label="Scraper workspace">
+      <section class="panel panel--configuration" aria-label="Configuration panels">
+        <div class="card">
+          <header class="card__header">
+            <h2>Source URL</h2>
+            <p class="card__subtitle">Define the target you want to scrape and preview the fully composed address.</p>
+          </header>
+          <div class="form-grid">
+            <label class="form-field">
+              <span class="form-label">Base URL</span>
+              <input id="base-url" type="url" placeholder="https://journal.example.org/article" autocomplete="off" />
+            </label>
+            <div class="form-field form-field--stacked">
+              <span class="form-label">Query parameters</span>
+              <div id="query-params" class="param-list" aria-live="polite"></div>
+              <button id="add-param" type="button" class="button button--ghost">Add parameter</button>
+            </div>
+          </div>
+          <div class="url-preview" aria-live="polite">
+            <span class="url-preview__label">Composed URL</span>
+            <a id="composed-url" class="url-preview__link" href="#" target="_blank" rel="noopener">—</a>
+          </div>
+        </div>
+
+        <div class="card">
+          <header class="card__header">
+            <h2>Quick link presets</h2>
+            <p class="card__subtitle">Load example configurations to explore the toolkit faster.</p>
+          </header>
+          <div class="quick-links" role="group" aria-label="Quick link presets">
+            <button type="button" class="button button--chip" data-quick-link="sample-article">Sample journal article</button>
+            <button type="button" class="button button--chip" data-quick-link="preprint">Preprint landing page</button>
+            <button type="button" class="button button--chip" data-quick-link="policy">Policy brief</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <header class="card__header">
+            <h2>Scraping modes</h2>
+            <p class="card__subtitle">Toggle strategies that will be applied while parsing the article.</p>
+          </header>
+          <div class="mode-toggle" role="group" aria-label="Scraping modes">
+            <button type="button" class="toggle-button toggle-button--active" data-mode="inline-footnotes" aria-pressed="true">Inline &amp; footnotes</button>
+            <button type="button" class="toggle-button" data-mode="hover-tooltips" aria-pressed="false">Simulate hover tooltips</button>
+            <button type="button" class="toggle-button" data-mode="batch">Batch runner</button>
+            <button type="button" class="toggle-button" data-mode="snapshots">Save HTML snapshots</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <header class="card__header">
+            <h2>Section selection</h2>
+            <p class="card__subtitle">Choose which subsections to scrape. Add custom selectors with <code>Title::CSS selector</code>.</p>
+          </header>
+          <fieldset class="section-picker">
+            <legend class="sr-only">Available sections</legend>
+            <div id="section-list" class="section-list"></div>
+            <div class="section-picker__actions">
+              <label class="form-field form-field--inline">
+                <span class="form-label">Add custom section</span>
+                <input id="custom-section" type="text" placeholder="Discussion::section#discussion" autocomplete="off" />
+              </label>
+              <button id="add-section" type="button" class="button button--ghost">Add</button>
+            </div>
+          </fieldset>
+        </div>
+
+        <div class="card">
+          <header class="card__header">
+            <h2>Source markup</h2>
+            <p class="card__subtitle">Paste article HTML to drive citation extraction and validation.</p>
+          </header>
+          <textarea id="raw-html" rows="12" placeholder="Paste article markup here..."></textarea>
+        </div>
+
+        <div class="card">
+          <header class="card__header">
+            <h2>Batch controls</h2>
+            <p class="card__subtitle">Start or stop scraping and monitor progress.</p>
+          </header>
+          <div class="control-row">
+            <button id="start-scrape" type="button" class="button button--primary">Start scraping</button>
+            <button id="stop-scrape" type="button" class="button button--secondary" disabled>Stop</button>
+          </div>
+          <div class="progress-block">
+            <progress id="batch-progress" max="1" value="0" aria-describedby="progress-label"></progress>
+            <span id="progress-label" class="progress-label">Idle</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <header class="card__header">
+            <h2>Activity log</h2>
+            <p class="card__subtitle">Real-time updates for the batch runner.</p>
+          </header>
+          <ul id="activity-log" class="activity-log" aria-live="polite"></ul>
+        </div>
+      </section>
+
+      <section class="panel panel--results" aria-label="Results and previews">
+        <div class="card card--tall">
+          <header class="card__header card__header--tabs">
+            <div>
+              <h2>Preview</h2>
+              <p class="card__subtitle">Inspect generated documents, citation tables, and footnotes.</p>
+            </div>
+            <nav class="preview-tabs" role="tablist">
+              <button type="button" class="preview-tab preview-tab--active" data-preview-tab="document" role="tab" aria-selected="true">Documents</button>
+              <button type="button" class="preview-tab" data-preview-tab="citations" role="tab" aria-selected="false">Inline citations</button>
+              <button type="button" class="preview-tab" data-preview-tab="footnotes" role="tab" aria-selected="false">Footnotes</button>
+            </nav>
+          </header>
+          <div class="preview-panes">
+            <section class="preview-pane preview-pane--active" data-pane="document" role="tabpanel" aria-label="Document preview">
+              <div id="document-preview" class="preview-scroll"></div>
+            </section>
+            <section class="preview-pane" data-pane="citations" role="tabpanel" aria-label="Inline citation preview" hidden>
+              <div id="citations-preview" class="preview-scroll"></div>
+            </section>
+            <section class="preview-pane" data-pane="footnotes" role="tabpanel" aria-label="Footnote preview" hidden>
+              <div id="footnotes-preview" class="preview-scroll"></div>
+            </section>
+          </div>
+        </div>
+
+        <div class="card">
+          <header class="card__header">
+            <h2>Export &amp; clipboard</h2>
+            <p class="card__subtitle">Download structured results or copy a quick summary.</p>
+          </header>
+          <div class="export-actions">
+            <button type="button" class="button button--secondary" data-export="json" disabled>Download JSON</button>
+            <button type="button" class="button button--secondary" data-export="markdown" disabled>Download Markdown</button>
+            <button type="button" class="button button--secondary" data-export="html" disabled>Download HTML</button>
+            <button type="button" class="button button--secondary" data-export="bibtex" disabled>Download BibTeX</button>
+          </div>
+          <button id="copy-clipboard" type="button" class="button button--ghost" disabled>Copy Markdown to clipboard</button>
+        </div>
+
+        <div class="card card--validation">
+          <header class="card__header">
+            <h2>Validation &amp; self-check</h2>
+            <p class="card__subtitle">Confirm every numbered inline citation matches a footnote entry.</p>
+          </header>
+          <p id="validation-summary" class="validation-summary">No documents generated yet.</p>
+          <ul id="validation-results" class="validation-list"></ul>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="script.js"></script>
+  </body>
+</html>
