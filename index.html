@@ -3,186 +3,287 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ADXS Knowledge Scraper</title>
+  <title>ADXS.org Production Web Scraper</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header class="app-header">
-    <div class="branding">
-      <h1>ADXS Knowledge Scraper</h1>
-      <p>Harvest sections, citations, tooltips, and footnotes from ADXS.org content for downstream analysis.</p>
-    </div>
-    <div class="header-meta">
-      <span class="badge">v1.0</span>
-      <span class="status-pill" id="statusPill">Idle</span>
-    </div>
-  </header>
-
-  <main class="app-layout">
-    <section class="panel configuration" aria-labelledby="configuration-heading">
-      <div class="panel-header">
-        <h2 id="configuration-heading">Configuration</h2>
-        <p>Define the scraping batch, select scraping modes, and adjust content capture options.</p>
-      </div>
-      <div class="panel-body">
-        <div class="inline-warning" id="proxyWarning" role="alert" hidden>
-          Live scraping requires the bundled local helper server. Follow the README steps to run <code>npm install</code> and
-          <code>npm run dev</code>, then reload this page from <code>http://localhost:3000</code>.
+  <div class="container">
+    <header class="header">
+      <h1>
+        ADXS.org Production Web Scraper
+        <span class="adxs-badge">SPECIALIZED</span>
+      </h1>
+      <p>Advanced scraper tailored for the ADXS.org structure, citations, tooltips, and content patterns.</p>
+      <div class="status-bar">
+        <div class="status-indicator status-ready" id="statusIndicator" role="status" aria-live="polite">
+          ● Ready to Scrape
         </div>
-        <label class="field">
-          <span class="field-label">Base URL</span>
-          <input type="url" id="baseUrl" value="https://www.adxs.org" placeholder="https://www.adxs.org" required>
-        </label>
-
-        <div class="field">
-          <span class="field-label">Scraping mode</span>
-          <div class="mode-toggle" role="group" aria-label="Scraping mode">
-            <button type="button" class="mode-button active" data-mode="single">Single page</button>
-            <button type="button" class="mode-button" data-mode="section">Section crawl</button>
-            <button type="button" class="mode-button" data-mode="batch">Batch list</button>
+        <div id="progressContainer" class="hidden" aria-hidden="true">
+          <div class="progress-bar" aria-hidden="true">
+            <div class="progress-fill" id="progressFill"></div>
           </div>
+          <span id="progressText">0%</span>
         </div>
-
-        <fieldset class="field options" aria-label="Capture options">
-          <legend>Capture options</legend>
-          <label>
-            <input type="checkbox" id="includeCitations" checked>
-            Inline citations
-          </label>
-          <label>
-            <input type="checkbox" id="includeTooltips" checked>
-            Tooltip text
-          </label>
-          <label>
-            <input type="checkbox" id="includeFootnotes" checked>
-            Footnotes &amp; endnotes
-          </label>
-        </fieldset>
-
-        <label class="field">
-          <span class="field-label">Paths to scrape</span>
-          <textarea id="paths" rows="6" placeholder="/wiki/some-article\n/wiki/another-article"></textarea>
-          <small class="field-hint">Enter one relative path per line. Leave blank for the base URL.</small>
-        </label>
-
-        <div class="control-bar">
-          <button type="button" class="control primary" id="startBtn">Start</button>
-          <button type="button" class="control" id="pauseBtn" disabled>Pause</button>
-          <button type="button" class="control" id="stopBtn" disabled>Stop</button>
-        </div>
-
-        <div class="progress-wrapper" aria-live="polite">
-          <div class="progress-bar" id="progressBar"></div>
-          <div class="progress-meta">
-            <span id="progressText">Awaiting configuration</span>
-            <span id="batchCounter">0 / 0</span>
-          </div>
+        <div id="scrapingStats" class="hidden" aria-hidden="true">
+          Pages: <span id="pagesScraped">0</span> ·
+          Citations: <span id="citationsFound">0</span> ·
+          Sections: <span id="sectionsFound">0</span>
         </div>
       </div>
-    </section>
+    </header>
 
-    <section class="panel results" aria-labelledby="results-heading">
-      <div class="panel-header results-header">
-        <div>
-          <h2 id="results-heading">Results</h2>
-          <p>Preview captured content, monitor statistics, and review the scraping log.</p>
+    <main class="main-grid">
+      <section class="panel configuration" aria-labelledby="configuration-heading">
+        <div class="panel-header">
+          <h2 id="configuration-heading">⚙️ ADXS Configuration</h2>
+          <p>Define your scraping batch, toggle capture options, and manage the helper proxy.</p>
         </div>
-        <div class="exports">
-          <button type="button" class="export" data-export="json">Export JSON</button>
-          <button type="button" class="export" data-export="markdown">Export Markdown</button>
-          <button type="button" class="export" data-export="html">Export HTML</button>
-          <button type="button" class="export" data-export="bibtex">Export BibTeX</button>
-          <button type="button" class="export" id="copyClipboard">Copy summary</button>
-        </div>
-      </div>
-        <div class="tabs" role="tablist">
-          <button type="button" role="tab" aria-selected="true" aria-controls="previewPane" class="tab active" data-tab="preview">Preview</button>
-          <button type="button" role="tab" aria-selected="false" aria-controls="statsPane" class="tab" data-tab="stats">Statistics</button>
-          <button type="button" role="tab" aria-selected="false" aria-controls="validationPane" class="tab" data-tab="validation">Validation</button>
-          <button type="button" role="tab" aria-selected="false" aria-controls="documentsPane" class="tab" data-tab="documents">Documents</button>
-          <button type="button" role="tab" aria-selected="false" aria-controls="logsPane" class="tab" data-tab="logs">Logs</button>
-        </div>
-      <div class="tab-panels">
-        <section id="previewPane" class="tab-panel active" role="tabpanel">
-          <div class="empty-state" id="previewEmpty">No pages scraped yet. Start a session to preview content.</div>
-          <div id="previewContent" class="preview-grid" hidden></div>
-        </section>
-        <section id="statsPane" class="tab-panel" role="tabpanel" aria-hidden="true">
-          <dl class="stats-grid">
-            <div>
-              <dt>Pages scraped</dt>
-              <dd id="statPages">0</dd>
+        <div class="panel-body">
+          <div class="inline-warning" id="proxyWarning" role="alert" hidden>
+            Live scraping requires the bundled helper server. Run <code>npm install</code> then <code>npm run dev</code> and reload
+            this page from <code>http://localhost:3000</code> (or <code>http://127.0.0.1:3000</code> on Android).
+          </div>
+
+          <div class="adxs-specific">
+            <h3>ADXS.org Optimised Features</h3>
+            <ul>
+              <li>Automatic citation detection linking inline markers to footnotes and tooltips</li>
+              <li>Section anchor extraction and subsection selection</li>
+              <li>Hierarchical sitemap browser for pre-run curation</li>
+              <li>Tooltip harvesting for <code>data-tippy-content</code> popovers</li>
+              <li>PubMed / DOI reference parsing and validation</li>
+              <li>Internal link integrity checks</li>
+            </ul>
+          </div>
+
+          <div class="url-builder" aria-labelledby="url-builder-heading">
+            <div class="url-header">
+              <span class="field-label" id="url-builder-heading">URL Builder</span>
+              <button type="button" class="chip-button" id="applyUrlBtn">Apply URL</button>
             </div>
-            <div>
-              <dt>Sections captured</dt>
-              <dd id="statSections">0</dd>
+            <div class="url-parts">
+              <span class="url-base">https://www.adxs.org/</span>
+              <select id="languageSelect" aria-label="Language">
+                <option value="en" selected>EN</option>
+                <option value="de">DE</option>
+              </select>
+              <input type="text" id="pathInput" placeholder="page/560/6-guidelines-for-diagnostics" autocomplete="off">
             </div>
-            <div>
-              <dt>Inline citations</dt>
-              <dd id="statCitations">0</dd>
+            <div class="url-target">
+              <strong>Target URL:</strong>
+              <span id="fullUrl">https://www.adxs.org/en/</span>
             </div>
-            <div>
-              <dt>Tooltip notes</dt>
-              <dd id="statTooltips">0</dd>
-            </div>
-            <div>
-              <dt>Footnotes</dt>
-              <dd id="statFootnotes">0</dd>
-            </div>
-            <div>
-              <dt>Total words</dt>
-              <dd id="statWords">0</dd>
-            </div>
-          </dl>
-        </section>
-        <section id="validationPane" class="tab-panel" role="tabpanel" aria-hidden="true">
-          <div class="validation-overview">
-            <div class="validation-status" id="validationStatus">Awaiting results</div>
-            <div class="validation-counts">
-              <span class="count pass">Pass <strong id="validationPassCount">0</strong></span>
-              <span class="count warning">Warnings <strong id="validationWarnCount">0</strong></span>
-              <span class="count error">Errors <strong id="validationErrorCount">0</strong></span>
+            <input type="hidden" id="baseUrl" value="https://www.adxs.org/en">
+            <div class="quick-urls" role="group" aria-label="Quick URLs">
+              <button type="button" class="quick-url" data-path="">Homepage</button>
+              <button type="button" class="quick-url" data-path="sitemap">Sitemap</button>
+              <button type="button" class="quick-url" data-path="page/15/abstract-from-adxsorg">Abstract</button>
+              <button type="button" class="quick-url" data-path="page/560/6-guidelines-for-diagnostics">Diagnostics</button>
+              <button type="button" class="quick-url" data-path="page/180/adhd-treatment-guide">Treatment</button>
             </div>
           </div>
-          <div class="empty-state" id="validationEmpty">Run a scrape to populate validation results.</div>
-          <ul id="validationList" class="validation-list" hidden></ul>
-        </section>
-        <section id="documentsPane" class="tab-panel" role="tabpanel" aria-hidden="true">
-          <div class="documents-intro">
-            <p>Select sections from the scraped pages to assemble focused documents. Give each document a clear name so you can
-              export them independently.</p>
-          </div>
-          <div class="empty-state" id="documentsEmpty">Scrape at least one page to unlock section selection.</div>
-          <div id="documentBuilder" class="document-builder" hidden></div>
-          <div class="document-actions" id="documentActions" hidden>
-            <label class="field">
-              <span class="field-label">Document name</span>
-              <input type="text" id="documentName" placeholder="e.g. Diagnostics overview">
+
+          <label class="field" for="scrapingMode">
+            <span class="field-label">Scraping Mode</span>
+            <select id="scrapingMode">
+              <option value="single">Single Page</option>
+              <option value="section">Section + Related Pages</option>
+              <option value="batch">Batch URLs</option>
+              <option value="sitemap">From Sitemap Selection</option>
+            </select>
+          </label>
+
+          <label class="field" id="pathsField">
+            <span class="field-label">Paths to Scrape</span>
+            <textarea id="paths" rows="5" placeholder="page/560/6-guidelines-for-diagnostics&#10;page/180/adhd-treatment-guide"></textarea>
+            <small class="field-hint">Enter one relative path per line. Leave blank to rely entirely on the sitemap selection.</small>
+          </label>
+
+          <fieldset class="field options" aria-labelledby="capture-options-heading">
+            <legend id="capture-options-heading">ADXS Content Extraction</legend>
+            <label class="checkbox-item">
+              <input type="checkbox" id="extractMainContent" checked>
+              <span>Main Content</span>
             </label>
-            <button type="button" class="control primary" id="createDocumentBtn">Create document from selected sections</button>
-            <button type="button" class="control" id="clearSelectionBtn">Clear selection</button>
+            <label class="checkbox-item">
+              <input type="checkbox" id="includeCitations" checked>
+              <span>Citations &amp; References</span>
+            </label>
+            <label class="checkbox-item">
+              <input type="checkbox" id="extractSections" checked>
+              <span>Section Structure</span>
+            </label>
+            <label class="checkbox-item">
+              <input type="checkbox" id="includeTooltips" checked>
+              <span>Tooltip Popovers</span>
+            </label>
+            <label class="checkbox-item">
+              <input type="checkbox" id="includeFootnotes" checked>
+              <span>Footnotes &amp; Endnotes</span>
+            </label>
+            <label class="checkbox-item">
+              <input type="checkbox" id="extractInternalLinks">
+              <span>Internal Links</span>
+            </label>
+            <label class="checkbox-item">
+              <input type="checkbox" id="extractAcknowledgments">
+              <span>Acknowledgments</span>
+            </label>
+            <label class="checkbox-item">
+              <input type="checkbox" id="extractMetadata">
+              <span>Page Metadata</span>
+            </label>
+          </fieldset>
+
+          <fieldset class="field options" aria-labelledby="processing-options-heading">
+            <legend id="processing-options-heading">Processing Options</legend>
+            <label class="checkbox-item">
+              <input type="checkbox" id="validateCitations" checked>
+              <span>Validate Citations</span>
+            </label>
+            <label class="checkbox-item">
+              <input type="checkbox" id="followInternalLinks" checked>
+              <span>Follow Related Links</span>
+            </label>
+            <label class="checkbox-item">
+              <input type="checkbox" id="downloadPDFs">
+              <span>Download PDF References</span>
+            </label>
+            <label class="checkbox-item">
+              <input type="checkbox" id="cleanFormatting" checked>
+              <span>Clean HTML Formatting</span>
+            </label>
+          </fieldset>
+
+          <div class="control-bar">
+            <button type="button" class="btn btn-primary" id="startBtn">▶️ Start Scraping</button>
+            <button type="button" class="btn btn-secondary" id="testConnectionBtn">🔗 Test Connection</button>
+            <button type="button" class="btn btn-warning" id="pauseBtn" disabled>⏸️ Pause</button>
+            <button type="button" class="btn btn-danger" id="stopBtn" disabled>⏹️ Stop</button>
           </div>
-          <div id="documentList" class="document-list" hidden></div>
-        </section>
-        <section id="logsPane" class="tab-panel" role="tabpanel" aria-hidden="true">
-          <ul id="logList" class="log-list"></ul>
-        </section>
-      </div>
-    </section>
+
+          <div id="batchProgress" class="batch-progress hidden" aria-live="polite">
+            <h4>Batch Progress</h4>
+            <div id="batchList"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel results" aria-labelledby="results-heading">
+        <div class="panel-header results-header">
+          <div>
+            <h2 id="results-heading">📊 Scraping Results</h2>
+            <p>Preview captured content, monitor validation, and build exportable documents.</p>
+          </div>
+          <div class="exports">
+            <button type="button" class="btn btn-success export" data-export="json">💾 JSON</button>
+            <button type="button" class="btn btn-success export" data-export="markdown">📝 Markdown</button>
+            <button type="button" class="btn btn-success export" data-export="html">🌐 HTML</button>
+            <button type="button" class="btn btn-success export" data-export="citations">📚 Citations</button>
+            <button type="button" class="btn btn-success export" data-export="bibtex">📖 BibTeX</button>
+            <button type="button" class="btn btn-secondary" id="copyClipboard">📋 Copy Summary</button>
+          </div>
+        </div>
+
+        <div class="stats-grid" role="list">
+          <div class="stat-card" role="listitem">
+            <h3 id="statWords">0</h3>
+            <p>Words</p>
+          </div>
+          <div class="stat-card" role="listitem">
+            <h3 id="statCitations">0</h3>
+            <p>Citations</p>
+          </div>
+          <div class="stat-card" role="listitem">
+            <h3 id="statSections">0</h3>
+            <p>Sections</p>
+          </div>
+          <div class="stat-card" role="listitem">
+            <h3 id="statPages">0</h3>
+            <p>Pages</p>
+          </div>
+          <div class="stat-card" role="listitem">
+            <h3 id="statTooltips">0</h3>
+            <p>Tooltip Notes</p>
+          </div>
+          <div class="stat-card" role="listitem">
+            <h3 id="statFootnotes">0</h3>
+            <p>Footnotes</p>
+          </div>
+        </div>
+
+        <div class="loader hidden" id="loader" aria-hidden="true"></div>
+
+        <div class="preview-panel">
+          <div class="preview-tabs" role="tablist">
+            <button type="button" class="preview-tab active" data-tab="content" role="tab" aria-selected="true">Content</button>
+            <button type="button" class="preview-tab" data-tab="citations" role="tab" aria-selected="false">Citations</button>
+            <button type="button" class="preview-tab" data-tab="structure" role="tab" aria-selected="false">Structure</button>
+            <button type="button" class="preview-tab" data-tab="validation" role="tab" aria-selected="false">Validation</button>
+            <button type="button" class="preview-tab" data-tab="documents" role="tab" aria-selected="false">Documents</button>
+            <button type="button" class="preview-tab" data-tab="raw" role="tab" aria-selected="false">Raw Data</button>
+            <button type="button" class="preview-tab" data-tab="logs" role="tab" aria-selected="false">Logs</button>
+          </div>
+          <div class="preview-content">
+            <div class="preview-pane active" id="contentPreview" role="tabpanel">
+              <p class="preview-placeholder">No content scraped yet. Configure your run and click <strong>Start Scraping</strong>.</p>
+            </div>
+            <div class="preview-pane" id="citationsPreview" role="tabpanel" aria-hidden="true">
+              <p class="preview-placeholder">No citations extracted yet.</p>
+            </div>
+            <div class="preview-pane" id="structurePreview" role="tabpanel" aria-hidden="true">
+              <p class="preview-placeholder">No structure captured yet.</p>
+            </div>
+            <div class="preview-pane" id="validationPreview" role="tabpanel" aria-hidden="true">
+              <div class="validation-overview">
+                <div class="validation-status" id="validationStatus">Awaiting results</div>
+                <div class="validation-counts">
+                  <span class="count pass">Pass <strong id="validationPassCount">0</strong></span>
+                  <span class="count warning">Warnings <strong id="validationWarnCount">0</strong></span>
+                  <span class="count error">Errors <strong id="validationErrorCount">0</strong></span>
+                </div>
+              </div>
+              <div class="empty-state" id="validationEmpty">Run a scrape to populate validation results.</div>
+              <ul id="validationList" class="validation-list hidden"></ul>
+            </div>
+            <div class="preview-pane" id="documentsPreview" role="tabpanel" aria-hidden="true">
+              <div class="documents-intro">
+                <p>Select sections from the scraped pages to assemble focused documents. Give each document a clear name so you can export them independently.</p>
+              </div>
+              <div class="empty-state" id="documentsEmpty">Scrape at least one page to unlock section selection.</div>
+              <div id="documentBuilder" class="document-builder hidden"></div>
+              <div class="document-actions hidden" id="documentActions">
+                <label class="field">
+                  <span class="field-label">Document name</span>
+                  <input type="text" id="documentName" placeholder="e.g. Diagnostics overview">
+                </label>
+                <div class="document-buttons">
+                  <button type="button" class="btn btn-primary" id="createDocumentBtn">Create document from selected sections</button>
+                  <button type="button" class="btn btn-secondary" id="clearSelectionBtn">Clear selection</button>
+                </div>
+              </div>
+              <div id="documentList" class="document-list hidden"></div>
+            </div>
+            <div class="preview-pane" id="rawPreview" role="tabpanel" aria-hidden="true">
+              <pre id="rawDataOutput" class="raw-output">[]</pre>
+            </div>
+            <div class="preview-pane" id="logsPreview" role="tabpanel" aria-hidden="true">
+              <ul id="logList" class="log-list"></ul>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
 
     <section class="panel structure" aria-labelledby="structure-heading">
       <div class="panel-header">
-        <h2 id="structure-heading">Site structure</h2>
-        <p>Load the ADXS sitemap, explore categories, and choose the sections that should feed the next scrape.</p>
+        <h2 id="structure-heading">📁 Sitemap Selection</h2>
+        <p>Explore the ADXS sitemap, select sections and subsections, and feed them directly into the scraping queue.</p>
       </div>
       <div class="panel-body structure-body">
-        <div class="structure-intro">
-          <p>Selections made here are added to the scraping queue automatically. Combine them with manual paths when you need a
-            custom batch.</p>
-        </div>
         <div class="structure-toolbar" id="structureActions">
           <button type="button" class="chip-button" data-action="refresh-structure">Refresh sitemap</button>
           <button type="button" class="chip-button" data-action="select-all">Select all</button>
@@ -198,12 +299,13 @@
         <div id="structureTree" class="structure-tree" role="tree" aria-label="ADXS sitemap"></div>
       </div>
     </section>
-  </main>
 
-  <footer class="app-footer">
-    <p>Built for rapid exploration of the ADXS knowledge base. All data remains on this device until exported.</p>
-  </footer>
+    <footer class="footer">
+      <p>Built for rapid exploration of the ADXS knowledge base. All data remains local until you export it.</p>
+    </footer>
+  </div>
 
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="script.js" defer></script>
 </body>
 </html>

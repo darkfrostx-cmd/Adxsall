@@ -24,23 +24,36 @@ An interactive browser application for harvesting structured content from the AD
    Leave this terminal window running. The server listens on [http://localhost:3000](http://localhost:3000), serves the UI, and exposes `/api/fetch` for proxied ADXS requests.
 4. **Open the UI** – visit `http://localhost:3000` in your browser. The blue proxy warning in the configuration panel disappears once the app detects it is being served over HTTP/HTTPS.
 
-## Using the sitemap selector
+## Choosing what to scrape
 
-The **Site structure** panel (left column) loads the live ADXS sitemap so you can curate a batch before scraping:
-
-- Click **Refresh sitemap** after changing the base URL or language. The panel automatically expands the categories pulled from `/en/sitemap` (or `/de/sitemap` if you switch languages).
-- Tick the checkboxes next to sections and subsections to add them to the scraping queue. Chips under the summary show the most recent selections.
-- Use the toolbar buttons to select everything, clear the current selection, or expand/collapse the category groups. Group-level buttons let you capture or clear one topic cluster at a time.
-- The selections feed directly into the next run. You can still paste manual paths in the “Paths to scrape” textarea—both sources are merged and de-duplicated when you click **Start**.
+- **URL builder** – the blue builder at the top lets you pick a language (`/en` or `/de`), type a relative path, and click **Apply URL** to stage it. The quick chips drop in popular ADXS articles, and the live preview shows the exact target (e.g. `https://www.adxs.org/en/page/560/…`).
+- **Manual paths** – keep extra paths (one per line) in the **Paths to scrape** textarea. The builder appends to this list; choose *Batch URLs* mode if you want every entry processed.
+- **Sitemap selection** – the **Sitemap Selection** panel loads the live site hierarchy via the helper proxy. Tick sections or entire groups before starting a run and they will be merged with the manual list automatically.
+- **Test connection** – the **🔗 Test Connection** button pings the helper server against the staged URL so you can confirm the proxy is running before a long scrape.
 
 ## Running a scrape
 
-1. **Base URL** – defaults to `https://www.adxs.org`. Point it at a mirrored host if required.
-2. **Scraping mode** – choose between *Single page*, *Section crawl*, or *Batch list*. Single mode only processes the first queued path; the other modes walk every entry.
-3. **Paths to scrape** – optionally add one relative or absolute URL per line. Leave the field empty to rely entirely on the sitemap selection.
-4. **Capture options** – toggle inline citations, tooltip text (including `data-tippy-content` popovers), and footnotes/endnotes. Leaving them enabled maximises validation coverage.
-5. **Controls** – click **Start** to begin. **Pause** temporarily suspends the queue; click again to resume. **Stop** cancels the remaining URLs.
-6. **Monitor progress** – the tabs in the Results panel show previews, aggregate statistics, validation findings, assembled documents, and the fetch log. Export buttons become active once at least one page succeeds.
+1. **Scraping mode** – choose between *Single page*, *Section + Related Pages*, *Batch URLs*, or *From Sitemap Selection*. Single mode only processes the first staged path; the others walk every entry.
+2. **Capture options** – toggle inline citations, tooltip text (including `data-tippy-content` popovers), footnotes/endnotes, and extra metadata. Leave them on for the most complete validation.
+3. **Processing options** – enable citation validation, related-link crawling, PDF downloads, and HTML cleaning depending on the batch you are preparing.
+4. **Controls** – click **Start Scraping** to begin. **Pause** temporarily suspends the queue; click again to resume. **Stop** cancels the remaining URLs. The status pill in the header reflects the current state, and the blue progress bar tracks processed pages.
+5. **Monitor progress** – the Results panel exposes multiple tabs:
+   - **Content** – card previews of the first few sections per page.
+   - **Citations** – every inline superscript, including tooltip text and outbound links.
+   - **Structure** – a flat list of captured headings for quick orientation.
+   - **Validation** – the self-check summary (pass/warn/error) with detailed messages.
+   - **Documents** – the section picker and document builder for assembling exports.
+   - **Raw Data / Logs** – the full JSON payload and streaming proxy log.
+   Export buttons across the top enable Markdown/HTML/JSON/BibTeX downloads once a page succeeds.
+
+## Using the sitemap selector
+
+The **Sitemap Selection** panel on the lower half of the page loads the ADXS sitemap so you can curate batches visually:
+
+- Click **Refresh sitemap** whenever you change the base URL or language. Categories expand automatically once data arrives via the helper proxy.
+- Tick the checkboxes next to sections and subsections to add them to the scraping queue. Chips under the summary show the most recent selections.
+- Use the toolbar buttons to select everything, clear the current selection, or expand/collapse category groups. Group-level buttons let you capture or clear one topic cluster at a time.
+- The selections are deduplicated with the manual path list when you click **Start Scraping**.
 
 ## Building custom documents
 

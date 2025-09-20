@@ -25,7 +25,8 @@
     selectedStructureUrls: new Set(),
     structureOpenGroups: new Set(),
     structureOrigin: '',
-    structureLanguage: 'en'
+    structureLanguage: 'en',
+    toastTimer: null
   };
 
   const elements = {};
@@ -34,6 +35,8 @@
   document.addEventListener('DOMContentLoaded', () => {
     cacheElements();
     attachEventListeners();
+    setMode(state.mode);
+    updateBuilderUrl();
     updateProgress();
     updateExports();
     renderPreview();
@@ -50,18 +53,28 @@
   function cacheElements() {
     elements.baseUrl = document.getElementById('baseUrl');
     elements.paths = document.getElementById('paths');
-    elements.modeButtons = Array.from(document.querySelectorAll('.mode-button'));
+    elements.pathsField = document.getElementById('pathsField');
+    elements.modeSelect = document.getElementById('scrapingMode');
     elements.startBtn = document.getElementById('startBtn');
     elements.pauseBtn = document.getElementById('pauseBtn');
     elements.stopBtn = document.getElementById('stopBtn');
+    elements.testConnectionBtn = document.getElementById('testConnectionBtn');
     elements.includeCitations = document.getElementById('includeCitations');
     elements.includeTooltips = document.getElementById('includeTooltips');
     elements.includeFootnotes = document.getElementById('includeFootnotes');
-    elements.progressBar = document.getElementById('progressBar');
+    elements.languageSelect = document.getElementById('languageSelect');
+    elements.pathInput = document.getElementById('pathInput');
+    elements.fullUrl = document.getElementById('fullUrl');
+    elements.applyUrlBtn = document.getElementById('applyUrlBtn');
+    elements.quickUrlButtons = Array.from(document.querySelectorAll('.quick-url'));
+    elements.progressContainer = document.getElementById('progressContainer');
+    elements.progressFill = document.getElementById('progressFill');
     elements.progressText = document.getElementById('progressText');
-    elements.batchCounter = document.getElementById('batchCounter');
-    elements.previewEmpty = document.getElementById('previewEmpty');
-    elements.previewContent = document.getElementById('previewContent');
+    elements.batchProgress = document.getElementById('batchProgress');
+    elements.batchList = document.getElementById('batchList');
+    elements.pagesScraped = document.getElementById('pagesScraped');
+    elements.citationsFound = document.getElementById('citationsFound');
+    elements.sectionsFound = document.getElementById('sectionsFound');
     elements.statPages = document.getElementById('statPages');
     elements.statSections = document.getElementById('statSections');
     elements.statCitations = document.getElementById('statCitations');
@@ -69,10 +82,16 @@
     elements.statFootnotes = document.getElementById('statFootnotes');
     elements.statWords = document.getElementById('statWords');
     elements.logList = document.getElementById('logList');
-    elements.statusPill = document.getElementById('statusPill');
-    elements.tabButtons = Array.from(document.querySelectorAll('.tab'));
-    elements.tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
+    elements.statusIndicator = document.getElementById('statusIndicator');
+    elements.previewTabs = Array.from(document.querySelectorAll('.preview-tab'));
+    elements.previewPanes = Array.from(document.querySelectorAll('.preview-pane'));
     elements.exportButtons = Array.from(document.querySelectorAll('.export[data-export]'));
+    elements.contentPreview = document.getElementById('contentPreview');
+    elements.citationsPreview = document.getElementById('citationsPreview');
+    elements.structurePreview = document.getElementById('structurePreview');
+    elements.documentsPreview = document.getElementById('documentsPreview');
+    elements.rawOutput = document.getElementById('rawDataOutput');
+    elements.toast = document.getElementById('toast');
     elements.validationStatus = document.getElementById('validationStatus');
     elements.validationPassCount = document.getElementById('validationPassCount');
     elements.validationWarnCount = document.getElementById('validationWarnCount');
@@ -95,17 +114,131 @@
     elements.structureStatus = document.getElementById('structureStatus');
   }
 
-  function attachEventListeners() {
-    elements.modeButtons.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        setMode(btn.dataset.mode);
+  function computeBuilderTarget() {
+    const selectedLanguage = (elements.languageSelect?.value || state.language || 'en').trim().toLowerCase();
+    const language = selectedLanguage === 'de' ? 'de' : 'en';
+    const rawHost = elements.baseUrl?.value?.trim();
+    let origin = DEFAULT_BASE_URL;
+    if (rawHost) {
+      try {
+        origin = extractOrigin(rawHost) || origin;
+      } catch (error) {
+        origin = DEFAULT_BASE_URL;
+      }
+    }
+    const rawPath = elements.pathInput?.value || '';
+    const cleanedPath = rawPath.replace(/^[\s/]+/, '').trim().replace(/\s+/g, ' ');
+    const base = `${origin.replace(/\/$/, '')}/${language}`;
+    const full = cleanedPath ? `${base}/${cleanedPath}` : `${base}/`;
+    return { language, path: cleanedPath, base, full };
+  }
+
+  function updateBuilderUrl() {
+    const target = computeBuilderTarget();
+    if (elements.fullUrl) {
+      elements.fullUrl.textContent = target.full;
+    }
+  }
+
+  function applyBuilderUrl(options = {}) {
+    const { append = true } = options;
+    const target = computeBuilderTarget();
+    if (elements.languageSelect && elements.languageSelect.value !== target.language) {
+      elements.languageSelect.value = target.language;
+    }
+    if (elements.baseUrl) {
+      elements.baseUrl.value = target.base;
+    }
+    if (elements.paths) {
+      const existing = new Set(
+        (elements.paths.value || '')
+          .split(/\n+/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+      );
+      if (!append) {
+        existing.clear();
+      }
+      if (target.path) {
+        existing.add(target.path);
+      } else if (!append) {
+        existing.clear();
+      }
+      elements.paths.value = Array.from(existing).join('\n');
+    }
+    updateBuilderUrl();
+    scheduleStructureRefresh();
+    const label = target.path ? `/${target.path}` : 'homepage';
+    log(`Prepared ${label} for scraping.`, 'info');
+  }
+
+  function setQuickUrl(path) {
+    if (elements.pathInput) {
+      elements.pathInput.value = (path || '').replace(/^\/+/, '');
+    }
+    updateBuilderUrl();
+    applyBuilderUrl({ append: true });
+  }
+
+  async function testConnection() {
+    if (!ensureHttpContext()) {
+      return;
+    }
+    const target = computeBuilderTarget();
+    updateStatus('active', 'Testing connection');
+    try {
+      const response = await fetch(buildProxyUrl(target.full), {
+        method: 'GET',
+        headers: { Accept: 'text/html,application/xhtml+xml' }
       });
-    });
+      if (!response.ok) {
+        throw new Error(`${response.status} ${response.statusText}`);
+      }
+      showToast('Proxy connection successful.', 'success');
+      log(`Proxy connection successful for ${target.full}.`, 'success');
+      updateStatus(state.isRunning ? 'active' : 'idle', state.isRunning ? 'Running' : 'Ready to Scrape');
+    } catch (error) {
+      showToast(`Connection failed: ${error.message}`, 'error');
+      log(`Connection test failed: ${error.message}`, 'error');
+      updateStatus('error', 'Connection failed');
+      setTimeout(() => {
+        updateStatus(state.isRunning ? 'active' : 'idle', state.isRunning ? 'Running' : 'Ready to Scrape');
+      }, 2400);
+    }
+  }
+
+  function attachEventListeners() {
+    if (elements.modeSelect) {
+      elements.modeSelect.addEventListener('change', () => {
+        setMode(elements.modeSelect.value);
+      });
+    }
 
     if (elements.baseUrl) {
       ['change', 'blur'].forEach((eventName) => {
         elements.baseUrl.addEventListener(eventName, scheduleStructureRefresh);
       });
+    }
+
+    if (elements.languageSelect) {
+      elements.languageSelect.addEventListener('change', updateBuilderUrl);
+    }
+    if (elements.pathInput) {
+      elements.pathInput.addEventListener('input', updateBuilderUrl);
+    }
+    if (elements.applyUrlBtn) {
+      elements.applyUrlBtn.addEventListener('click', () => applyBuilderUrl({ append: false }));
+    }
+    if (elements.quickUrlButtons?.length) {
+      elements.quickUrlButtons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          setQuickUrl(btn.dataset.path || '');
+        });
+      });
+    }
+
+    if (elements.testConnectionBtn) {
+      elements.testConnectionBtn.addEventListener('click', testConnection);
     }
 
     elements.includeCitations.addEventListener('change', () => {
@@ -127,9 +260,11 @@
     elements.pauseBtn.addEventListener('click', togglePause);
     elements.stopBtn.addEventListener('click', stopScrape);
 
-    elements.tabButtons.forEach((tab) => {
-      tab.addEventListener('click', () => switchTab(tab.dataset.tab));
-    });
+    if (elements.previewTabs?.length) {
+      elements.previewTabs.forEach((tab) => {
+        tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+      });
+    }
 
     elements.exportButtons.forEach((btn) => {
       btn.addEventListener('click', () => handleExport(btn.dataset.export));
@@ -804,12 +939,23 @@
   }
 
   function setMode(mode) {
-    if (state.mode === mode) return;
+    if (!mode) return;
+    const previousMode = state.mode;
     state.mode = mode;
-    elements.modeButtons.forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.mode === mode);
-    });
-    log(`Switched to ${modeLabel(mode)} mode.`);
+    if (elements.modeSelect && elements.modeSelect.value !== mode) {
+      elements.modeSelect.value = mode;
+    }
+    if (elements.pathsField) {
+      const hidePaths = mode === 'sitemap';
+      elements.pathsField.classList.toggle('hidden', hidePaths);
+      elements.pathsField.setAttribute('aria-hidden', String(hidePaths));
+    }
+    if (elements.batchProgress) {
+      elements.batchProgress.classList.toggle('hidden', mode !== 'batch');
+    }
+    if (mode !== previousMode) {
+      log(`Switched to ${modeLabel(mode)} mode.`);
+    }
   }
 
   function modeLabel(mode) {
@@ -818,6 +964,8 @@
         return 'batch';
       case 'section':
         return 'section crawl';
+      case 'sitemap':
+        return 'sitemap selection';
       default:
         return 'single page';
     }
@@ -1490,14 +1638,19 @@
   }
 
   function switchTab(tabName) {
-    elements.tabButtons.forEach((btn) => {
+    if (!elements.previewTabs?.length || !elements.previewPanes?.length) {
+      return;
+    }
+
+    elements.previewTabs.forEach((btn) => {
       const isActive = btn.dataset.tab === tabName;
       btn.classList.toggle('active', isActive);
       btn.setAttribute('aria-selected', String(isActive));
     });
 
-    elements.tabPanels.forEach((panel) => {
-      const isActive = panel.id === `${tabName}Pane`;
+    const targetId = `${tabName}Preview`;
+    elements.previewPanes.forEach((panel) => {
+      const isActive = panel.id === targetId;
       panel.classList.toggle('active', isActive);
       panel.setAttribute('aria-hidden', String(!isActive));
     });
@@ -1508,7 +1661,13 @@
     const processed = state.processed || 0;
     const current = activeUrl ? Math.min(processed, total) : processed;
     const progress = total === 0 ? 0 : Math.round((current / total) * 100);
-    elements.progressBar.style.width = `${progress}%`;
+    if (elements.progressFill) {
+      elements.progressFill.style.width = `${progress}%`;
+    }
+    if (elements.progressContainer) {
+      elements.progressContainer.classList.toggle('hidden', total === 0);
+      elements.progressContainer.setAttribute('aria-hidden', String(total === 0));
+    }
     let activeLabel = 'Processing';
     if (activeUrl) {
       try {
@@ -1518,44 +1677,45 @@
         activeLabel = activeUrl;
       }
     }
-    elements.progressText.textContent = state.isRunning
-      ? activeLabel
-      : processed === 0
-      ? 'Awaiting configuration'
-      : 'Session complete';
-    elements.batchCounter.textContent = `${Math.min(processed, total)} / ${total}`;
+    if (elements.progressText) {
+      elements.progressText.textContent = state.isRunning
+        ? activeLabel
+        : processed === 0
+        ? 'Awaiting configuration'
+        : 'Session complete';
+    }
+    if (elements.pagesScraped) {
+      elements.pagesScraped.textContent = Math.min(processed, total);
+    }
   }
 
   function updateStatus(type, label) {
-    elements.statusPill.textContent = label;
-    let background;
-    switch (type) {
-      case 'active':
-        background = 'rgba(56, 189, 248, 0.2)';
-        break;
-      case 'paused':
-        background = 'rgba(250, 204, 21, 0.25)';
-        break;
-      case 'idle':
-      default:
-        background = 'rgba(148, 163, 184, 0.2)';
+    if (!elements.statusIndicator) return;
+    elements.statusIndicator.textContent = `● ${label}`;
+    elements.statusIndicator.classList.remove('status-ready', 'status-processing', 'status-error');
+    if (type === 'active') {
+      elements.statusIndicator.classList.add('status-processing');
+    } else if (type === 'error') {
+      elements.statusIndicator.classList.add('status-error');
+    } else {
+      elements.statusIndicator.classList.add('status-ready');
     }
-    elements.statusPill.style.background = background;
   }
 
   function renderPreview() {
-    const container = elements.previewContent;
+    if (!elements.contentPreview) return;
+
     if (state.results.length === 0) {
-      elements.previewEmpty.hidden = false;
-      container.hidden = true;
-      container.innerHTML = '';
+      setPreviewPlaceholder(elements.contentPreview, 'No content scraped yet. Configure your run and click <strong>Start Scraping</strong>.');
+      setPreviewPlaceholder(elements.citationsPreview, 'No citations extracted yet.');
+      setPreviewPlaceholder(elements.structurePreview, 'No structure captured yet.');
+      if (elements.rawOutput) {
+        elements.rawOutput.textContent = '[]';
+      }
       return;
     }
 
-    elements.previewEmpty.hidden = true;
-    container.hidden = false;
-
-    container.innerHTML = state.results
+    elements.contentPreview.innerHTML = state.results
       .map((result) => {
         let hostname = '';
         try {
@@ -1586,7 +1746,7 @@
                 <span>${result.stats.words} words</span>
               </div>
             </header>
-            ${sectionPreview}
+            ${sectionPreview || '<p>No sections captured.</p>'}
             <footer>
               <a href="${result.url}" target="_blank" rel="noopener">Open on ADXS.org</a>
             </footer>
@@ -1594,6 +1754,76 @@
         `;
       })
       .join('');
+
+    if (elements.citationsPreview) {
+      const citationHtml = state.results
+        .map((result) => {
+          if (!result.inlineCitations?.length) {
+            return `
+              <article class="preview-card">
+                <header><h3>${escapeHtml(result.title)}</h3></header>
+                <p class="preview-placeholder">No inline citations detected for this page.</p>
+              </article>
+            `;
+          }
+          const items = result.inlineCitations
+            .map(
+              (citation, index) => `
+                <div class="citation-preview">
+                  <span class="citation-number">[${index + 1}] ${escapeHtml(citation.text)}</span>
+                  ${citation.tooltipText ? `<div class="citation-text">${escapeHtml(citation.tooltipText)}</div>` : ''}
+                  ${citation.href ? `<a class="citation-link" href="${citation.href}" target="_blank" rel="noopener">${escapeHtml(citation.href)}</a>` : ''}
+                </div>
+              `
+            )
+            .join('');
+          return `
+            <article class="preview-card">
+              <header><h3>${escapeHtml(result.title)}</h3></header>
+              ${items}
+            </article>
+          `;
+        })
+        .join('');
+      elements.citationsPreview.innerHTML = citationHtml;
+    }
+
+    if (elements.structurePreview) {
+      const structureHtml = state.results
+        .map((result) => {
+          if (!result.sections?.length) {
+            return '';
+          }
+          const listItems = result.sections
+            .map(
+              (section, index) => `
+                <li>
+                  <span class="section-order">${index + 1}.</span>
+                  <span class="section-heading">${escapeHtml(section.heading)}</span>
+                </li>
+              `
+            )
+            .join('');
+          return `
+            <article class="preview-card">
+              <header><h3>${escapeHtml(result.title)}</h3></header>
+              <ul class="section-list">${listItems}</ul>
+            </article>
+          `;
+        })
+        .filter(Boolean)
+        .join('');
+      elements.structurePreview.innerHTML = structureHtml || '<p class="preview-placeholder">No sections captured.</p>';
+    }
+
+    if (elements.rawOutput) {
+      elements.rawOutput.textContent = JSON.stringify(state.results, null, 2);
+    }
+  }
+
+  function setPreviewPlaceholder(element, message) {
+    if (!element) return;
+    element.innerHTML = `<p class="preview-placeholder">${message}</p>`;
   }
 
   function renderStats() {
@@ -1616,6 +1846,15 @@
     elements.statTooltips.textContent = totals.tooltips;
     elements.statFootnotes.textContent = totals.footnotes;
     elements.statWords.textContent = totals.words.toLocaleString();
+    if (elements.pagesScraped) {
+      elements.pagesScraped.textContent = totals.pages;
+    }
+    if (elements.citationsFound) {
+      elements.citationsFound.textContent = totals.citations;
+    }
+    if (elements.sectionsFound) {
+      elements.sectionsFound.textContent = totals.sections;
+    }
   }
 
   function renderValidation() {
@@ -1687,17 +1926,17 @@
 
     if (!aggregated.length) {
       if (elements.validationEmpty) {
-        elements.validationEmpty.hidden = false;
+        elements.validationEmpty.classList.remove('hidden');
       }
-      elements.validationList.hidden = true;
+      elements.validationList.classList.add('hidden');
       elements.validationList.innerHTML = '';
       return;
     }
 
     if (elements.validationEmpty) {
-      elements.validationEmpty.hidden = true;
+      elements.validationEmpty.classList.add('hidden');
     }
-    elements.validationList.hidden = false;
+    elements.validationList.classList.remove('hidden');
 
     elements.validationList.innerHTML = aggregated
       .map((item) => {
@@ -1783,13 +2022,13 @@
     }
 
     const hasResults = state.results.length > 0;
-    elements.documentsEmpty.hidden = hasResults;
-    elements.documentBuilder.hidden = !hasResults;
-    elements.documentActions.hidden = !hasResults;
+    elements.documentsEmpty.classList.toggle('hidden', hasResults);
+    elements.documentBuilder.classList.toggle('hidden', !hasResults);
+    elements.documentActions.classList.toggle('hidden', !hasResults);
 
     if (!hasResults) {
       if (elements.documentList) {
-        elements.documentList.hidden = true;
+        elements.documentList.classList.add('hidden');
         elements.documentList.innerHTML = '';
       }
       return;
@@ -1979,13 +2218,13 @@
     if (!elements.documentList) return;
 
     if (state.results.length === 0) {
-      elements.documentList.hidden = true;
+      elements.documentList.classList.add('hidden');
       elements.documentList.innerHTML = '';
       return;
     }
 
     if (state.documents.length === 0) {
-      elements.documentList.hidden = false;
+      elements.documentList.classList.remove('hidden');
       elements.documentList.innerHTML =
         '<p class="document-empty">No custom documents yet. Select sections above and create your first document.</p>';
       return;
@@ -2025,7 +2264,7 @@
       })
       .join('');
 
-    elements.documentList.hidden = false;
+    elements.documentList.classList.remove('hidden');
     elements.documentList.innerHTML = cards;
   }
 
@@ -2247,7 +2486,7 @@ ${body}
       .slice(-120)
       .map(
         (entry) => `
-          <li class="log-entry" data-type="${entry.type}">
+          <li class="log-entry ${entry.type}" data-type="${entry.type}">
             <span>${escapeHtml(entry.message)}</span>
             <time datetime="${entry.timestamp}">${formatTimestamp(entry.timestamp)}</time>
           </li>
@@ -2264,6 +2503,21 @@ ${body}
     };
     state.logs.push(entry);
     renderLogs();
+  }
+
+  function showToast(message, variant = 'success') {
+    if (!elements.toast) return;
+    const toast = elements.toast;
+    toast.classList.remove('success', 'error', 'warning');
+    toast.textContent = message;
+    toast.classList.add(variant);
+    toast.classList.add('show');
+    if (state.toastTimer) {
+      clearTimeout(state.toastTimer);
+    }
+    state.toastTimer = setTimeout(() => {
+      toast.classList.remove('show');
+    }, 3200);
   }
 
   function updateExports() {
