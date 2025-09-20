@@ -13,7 +13,9 @@
     processed: 0,
     total: 0,
     results: [],
-    logs: []
+    logs: [],
+    documents: [],
+    selectedSections: new Map()
   };
 
   const elements = {};
@@ -27,6 +29,9 @@
     renderStats();
     renderValidation();
     renderLogs();
+    renderDocumentBuilder();
+    renderDocuments();
+    updateProxyWarning();
   });
 
   function cacheElements() {
@@ -62,6 +67,14 @@
     elements.validationEmpty = document.getElementById('validationEmpty');
     elements.validationList = document.getElementById('validationList');
     elements.copyClipboard = document.getElementById('copyClipboard');
+    elements.proxyWarning = document.getElementById('proxyWarning');
+    elements.documentBuilder = document.getElementById('documentBuilder');
+    elements.documentActions = document.getElementById('documentActions');
+    elements.documentName = document.getElementById('documentName');
+    elements.createDocumentBtn = document.getElementById('createDocumentBtn');
+    elements.clearSelectionBtn = document.getElementById('clearSelectionBtn');
+    elements.documentsEmpty = document.getElementById('documentsEmpty');
+    elements.documentList = document.getElementById('documentList');
   }
 
   function attachEventListeners() {
@@ -99,6 +112,19 @@
     });
 
     elements.copyClipboard.addEventListener('click', copySummaryToClipboard);
+
+    if (elements.documentBuilder) {
+      elements.documentBuilder.addEventListener('change', handleDocumentSelectionChange);
+    }
+    if (elements.createDocumentBtn) {
+      elements.createDocumentBtn.addEventListener('click', createDocumentFromSelection);
+    }
+    if (elements.clearSelectionBtn) {
+      elements.clearSelectionBtn.addEventListener('click', clearSelectedSections);
+    }
+    if (elements.documentList) {
+      elements.documentList.addEventListener('click', handleDocumentListClick);
+    }
   }
 
   function setMode(mode) {
@@ -127,6 +153,10 @@
       return;
     }
 
+    if (!ensureHttpContext()) {
+      return;
+    }
+
     state.baseUrl = (elements.baseUrl.value || 'https://www.adxs.org').trim().replace(/\/$/, '');
     const rawPaths = elements.paths.value
       .split(/\n+/)
@@ -152,6 +182,8 @@
     state.processed = 0;
     state.results = [];
     state.logs = [];
+    state.documents = [];
+    state.selectedSections = new Map();
     state.isRunning = true;
     state.isPaused = false;
 
@@ -159,6 +191,9 @@
     elements.pauseBtn.textContent = 'Pause';
     elements.stopBtn.disabled = false;
     elements.startBtn.disabled = true;
+    if (elements.documentName) {
+      elements.documentName.value = '';
+    }
 
     updateStatus('active', 'Running');
     updateProgress();
@@ -167,6 +202,8 @@
     renderPreview();
     renderStats();
     renderValidation();
+    renderDocumentBuilder();
+    renderDocuments();
     log(`Session started in ${modeLabel(state.mode)} mode targeting ${state.total} page${state.total === 1 ? '' : 's'}.`);
     processQueue();
   }
@@ -208,6 +245,8 @@
     elements.pauseBtn.textContent = 'Pause';
     updateStatus('idle', 'Stopped');
     updateProgress();
+    renderDocumentBuilder();
+    renderDocuments();
     log('Session stopped by user.');
   }
 
@@ -234,6 +273,8 @@
       renderStats();
       updateExports();
       renderValidation();
+      renderDocumentBuilder();
+      renderDocuments();
       if (result.validation?.summary) {
         const { summary } = result.validation;
         const validationSeverity = summary.status === 'error' ? 'error' : summary.status === 'warning' ? 'warning' : 'success';
@@ -270,14 +311,18 @@
     updateStatus('idle', 'Completed');
     updateProgress();
     renderLogs();
+    renderDocumentBuilder();
+    renderDocuments();
     log('Scraping session completed.');
   }
 
   async function scrapeUrl(url) {
-    const response = await fetch(url, {
+    const response = await fetch(buildProxyUrl(url), {
       method: 'GET',
-      mode: 'cors',
-      credentials: 'omit'
+      credentials: 'omit',
+      headers: {
+        Accept: 'text/html,application/xhtml+xml'
+      }
     });
 
     if (!response.ok) {
@@ -296,11 +341,7 @@
     const footnotes = state.options.footnotes ? collectFootnotes(doc) : [];
     const validation = validatePage(inlineCitations, tooltips, footnotes, state.options);
 
-    const wordCount = main.textContent
-      .replace(/\s+/g, ' ')
-      .trim()
-      .split(' ')
-      .filter(Boolean).length;
+    const wordCount = countWords(main.textContent);
 
     return {
       url,
@@ -376,32 +417,36 @@
   }
 
   function collectInlineCitations(root) {
-    const nodes = Array.from(
-      root.querySelectorAll('sup, a[rel="footnote"], a[href*="#cite"], a[href*="#footnote"], a[href*="#fn"], span.citation')
-    );
+    const doc = root.ownerDocument || document;
+    const selector =
+      'sup, a[rel="footnote"], a[role="doc-noteref"], a.footnote-ref, a[href*="#cite"], a[href*="#footnote"], a[href*="#fn"], span.citation';
+    const nodes = Array.from(root.querySelectorAll(selector));
 
     const citations = nodes
       .map((node, index) => {
-        const anchor = node.tagName === 'SUP' ? node.querySelector('a') || node : node;
-        const href = anchor.getAttribute('href') || '';
-        const text = anchor.textContent.trim();
+        const sup = node.closest('sup');
+        const anchor = resolveCitationAnchor(node);
+        const text = normaliseWhitespace(anchor?.textContent || node.textContent);
         if (!text) {
           return null;
         }
-        const tooltipId = (anchor.getAttribute('aria-describedby') || node.getAttribute('aria-describedby') || '').trim();
-        const tooltipText =
-          anchor.getAttribute('data-tooltip') ||
-          anchor.getAttribute('title') ||
-          node.getAttribute('data-tooltip') ||
-          node.getAttribute('title') ||
+        const href = anchor?.getAttribute('href') || node.getAttribute('href') || '';
+        const tooltipId =
+          anchor?.getAttribute('aria-describedby') ||
+          node.getAttribute('aria-describedby') ||
+          sup?.id ||
+          anchor?.id ||
+          node.id ||
           '';
+        const tooltipInfo = extractTooltipContent(doc, anchor, node, sup);
         return {
-          id: anchor.id || node.id || `citation-${index + 1}`,
+          id: anchor?.id || node.id || sup?.id || `citation-${index + 1}`,
           text,
           href,
-          tooltipId,
-          tooltipText: tooltipText.trim(),
-          context: node.closest('p, li')?.textContent?.trim().slice(0, 240) || ''
+          tooltipId: tooltipId.trim(),
+          tooltipText: tooltipInfo.text,
+          tooltipHtml: tooltipInfo.html,
+          context: normaliseWhitespace(node.closest('p, li')?.textContent || '').slice(0, 240)
         };
       })
       .filter(Boolean);
@@ -409,7 +454,7 @@
     const unique = [];
     const seen = new Set();
     citations.forEach((item) => {
-      const key = `${item.text}|${item.href}`;
+      const key = `${item.text}|${item.href}|${item.tooltipHtml}`;
       if (!seen.has(key)) {
         seen.add(key);
         unique.push(item);
@@ -420,15 +465,25 @@
   }
 
   function collectTooltips(root) {
-    const nodes = Array.from(root.querySelectorAll('[data-tooltip], [title], abbr[title], span.tooltip'));
+    const doc = root.ownerDocument || document;
+    const selector = '[data-tippy-content], [data-tooltip], [title], abbr[title], span.tooltip';
+    const nodes = Array.from(root.querySelectorAll(selector));
     return nodes
       .map((node, index) => {
-        const tooltip = node.getAttribute('data-tooltip') || node.getAttribute('title');
-        if (!tooltip) return null;
+        const sup = node.closest('sup');
+        const tooltipInfo = extractTooltipContent(doc, node, sup);
+        if (!tooltipInfo.text && !tooltipInfo.html) return null;
+        const referenceId =
+          node.getAttribute('aria-describedby') ||
+          node.getAttribute('data-tooltip-id') ||
+          sup?.id ||
+          '';
         return {
-          id: node.id || `tooltip-${index + 1}`,
-          text: tooltip.trim(),
-          context: node.textContent.trim()
+          id: node.id || sup?.id || `tooltip-${index + 1}`,
+          referenceId: referenceId.trim(),
+          text: tooltipInfo.text,
+          html: tooltipInfo.html,
+          context: normaliseWhitespace(node.textContent).slice(0, 240)
         };
       })
       .filter(Boolean);
@@ -459,7 +514,7 @@
       seen.add(id);
       unique.push({
         id,
-        text: node.textContent.trim(),
+        text: normaliseWhitespace(node.textContent),
         html: node.innerHTML.trim()
       });
     });
@@ -537,7 +592,7 @@
     const tooltipTextMap = new Map();
     if (captureTooltips) {
       tooltips.forEach((tooltip) => {
-        collectKeys([tooltip.id]).forEach((key) => {
+        collectKeys([tooltip.id, tooltip.referenceId]).forEach((key) => {
           if (!tooltipMap.has(key)) {
             tooltipMap.set(key, tooltip);
           }
@@ -578,7 +633,7 @@
         for (const key of tooltipKeys) {
           if (tooltipMap.has(key)) {
             tooltip = tooltipMap.get(key);
-            collectKeys([tooltip.id]).forEach((variant) => referencedTooltipIds.add(variant));
+            collectKeys([tooltip.id, tooltip.referenceId]).forEach((variant) => referencedTooltipIds.add(variant));
             if (tooltip.text) {
               referencedTooltipTexts.add(tooltip.text.trim().toLowerCase());
             }
@@ -591,7 +646,7 @@
           if (tooltipTextMap.has(textKey)) {
             tooltip = tooltipTextMap.get(textKey);
             if (tooltip.id) {
-              collectKeys([tooltip.id]).forEach((variant) => referencedTooltipIds.add(variant));
+              collectKeys([tooltip.id, tooltip.referenceId]).forEach((variant) => referencedTooltipIds.add(variant));
             }
             referencedTooltipTexts.add(textKey);
           }
@@ -650,7 +705,9 @@
           footnoteId: footnote?.id || '',
           footnoteTarget,
           tooltipId: tooltip?.id || citation.tooltipId || '',
+          tooltipReferenceId: tooltip?.referenceId || citation.tooltipId || '',
           tooltipText: citation.tooltipText || tooltip?.text || '',
+          tooltipHtml: citation.tooltipHtml || tooltip?.html || '',
           href: citation.href,
           context: citation.context || ''
         }
@@ -683,13 +740,16 @@
           idKeys.some((key) => referencedTooltipIds.has(key)) ||
           (textKey && referencedTooltipTexts.has(textKey));
         if (!hasReference) {
+          const label = tooltip.id || tooltip.referenceId || tooltip.text.slice(0, 40) || `#${tooltips.indexOf(tooltip) + 1}`;
           record({
             severity: 'warning',
             scope: 'tooltip',
-            message: `Tooltip ${tooltip.id || tooltip.text.slice(0, 40)} is not associated with any citation.`,
+            message: `Tooltip ${label} is not associated with any citation.`,
             details: {
               tooltipId: tooltip.id,
-              tooltipText: tooltip.text
+              referenceId: tooltip.referenceId || '',
+              tooltipText: tooltip.text,
+              tooltipHtml: tooltip.html || ''
             }
           });
         }
@@ -944,7 +1004,17 @@
       .map((item) => {
         const detailLines = [];
         if (item.details) {
-          const { citationText, citationId, footnoteId, footnoteTarget, tooltipId, tooltipText, href } = item.details;
+          const {
+            citationText,
+            citationId,
+            footnoteId,
+            footnoteTarget,
+            tooltipId,
+            tooltipText,
+            tooltipReferenceId,
+            tooltipHtml,
+            href
+          } = item.details;
           if (citationText) {
             detailLines.push(`Citation text: ${citationText}`);
           }
@@ -961,6 +1031,13 @@
             detailLines.push(`Tooltip ref: ${tooltipId}`);
           } else if (tooltipText && item.scope === 'citation') {
             detailLines.push(`Tooltip text: ${tooltipText}`);
+          }
+          if (tooltipReferenceId && tooltipReferenceId !== tooltipId) {
+            detailLines.push(`Tooltip reference id: ${tooltipReferenceId}`);
+          }
+          if (tooltipHtml && item.scope === 'tooltip') {
+            const clipped = tooltipHtml.length > 120 ? `${tooltipHtml.slice(0, 120)}…` : tooltipHtml;
+            detailLines.push(`Tooltip HTML: ${clipped}`);
           }
           if (href) {
             detailLines.push(`Href: ${href}`);
@@ -999,6 +1076,471 @@
         `;
       })
       .join('');
+  }
+
+  function renderDocumentBuilder() {
+    if (!elements.documentBuilder || !elements.documentsEmpty || !elements.documentActions) {
+      return;
+    }
+
+    const hasResults = state.results.length > 0;
+    elements.documentsEmpty.hidden = hasResults;
+    elements.documentBuilder.hidden = !hasResults;
+    elements.documentActions.hidden = !hasResults;
+
+    if (!hasResults) {
+      if (elements.documentList) {
+        elements.documentList.hidden = true;
+        elements.documentList.innerHTML = '';
+      }
+      return;
+    }
+
+    const markup = state.results
+      .map((result, index) => {
+        const selectedIds = state.selectedSections.get(index) || new Set();
+        const sectionMarkup = result.sections
+          .map(
+            (section) => `
+              <div class="doc-section">
+                <label>
+                  <input type="checkbox" data-page-index="${index}" data-section-id="${escapeHtml(section.id)}" ${
+              selectedIds.has(section.id) ? 'checked' : ''
+            }>
+                  <span>${escapeHtml(section.heading)}</span>
+                </label>
+              </div>
+            `
+          )
+          .join('');
+        const sectionLabel = `${result.stats.sections} section${result.stats.sections === 1 ? '' : 's'}`;
+        const selectedLabel = `${selectedIds.size} selected`;
+        const openAttr = selectedIds.size > 0 ? ' open' : '';
+        return `
+          <details class="doc-source" data-page-index="${index}"${openAttr}>
+            <summary data-page-index="${index}">
+              <span>${escapeHtml(result.title)}</span>
+              <span class="doc-meta">
+                <span data-role="total">${sectionLabel}</span>
+                <span data-role="selected" data-page-index="${index}">${selectedLabel}</span>
+              </span>
+            </summary>
+            <div class="doc-section-list">
+              ${sectionMarkup || '<p class="document-empty">No sections detected for this page.</p>'}
+            </div>
+          </details>
+        `;
+      })
+      .join('');
+
+    elements.documentBuilder.innerHTML = markup;
+  }
+
+  function handleDocumentSelectionChange(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || target.type !== 'checkbox') {
+      return;
+    }
+    const pageIndex = Number(target.dataset.pageIndex);
+    const sectionId = target.dataset.sectionId;
+    if (!Number.isInteger(pageIndex) || !sectionId) {
+      return;
+    }
+
+    let selection = state.selectedSections.get(pageIndex);
+    if (!selection) {
+      selection = new Set();
+      state.selectedSections.set(pageIndex, selection);
+    }
+
+    if (target.checked) {
+      selection.add(sectionId);
+    } else {
+      selection.delete(sectionId);
+      if (selection.size === 0) {
+        state.selectedSections.delete(pageIndex);
+      }
+    }
+
+    updateDocumentSelectionMeta(pageIndex);
+  }
+
+  function updateDocumentSelectionMeta(pageIndex) {
+    if (!elements.documentBuilder) return;
+    const meta = elements.documentBuilder.querySelector(
+      `summary [data-role="selected"][data-page-index="${pageIndex}"]`
+    );
+    const selection = state.selectedSections.get(pageIndex);
+    const count = selection ? selection.size : 0;
+    if (meta) {
+      meta.textContent = `${count} selected`;
+    }
+  }
+
+  function clearSelectedSections() {
+    if (state.selectedSections.size === 0) {
+      log('No sections are currently selected.', 'info');
+      return;
+    }
+    state.selectedSections.clear();
+    renderDocumentBuilder();
+    renderDocuments();
+    log('Cleared the current section selection.', 'info');
+  }
+
+  function collectSelectedSections() {
+    const collected = [];
+    state.results.forEach((result, pageIndex) => {
+      const selection = state.selectedSections.get(pageIndex);
+      if (!selection || selection.size === 0) {
+        return;
+      }
+      result.sections.forEach((section) => {
+        if (!selection.has(section.id)) return;
+        collected.push({
+          pageIndex,
+          pageUrl: result.url,
+          pageTitle: result.title,
+          sectionId: section.id,
+          heading: section.heading,
+          text: section.text,
+          html: section.html,
+          wordCount: countWords(section.text)
+        });
+      });
+    });
+    return collected;
+  }
+
+  function createDocumentFromSelection() {
+    const sections = collectSelectedSections();
+    if (sections.length === 0) {
+      log('Select at least one section before creating a document.', 'warning');
+      return;
+    }
+
+    const nameInput = elements.documentName?.value || '';
+    const name = normaliseWhitespace(nameInput) || `Document ${state.documents.length + 1}`;
+    const grouped = groupSectionsByPage(sections);
+    const wordCount = sections.reduce((total, section) => total + section.wordCount, 0);
+    const documentRecord = {
+      id: `doc-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      name,
+      createdAt: new Date().toISOString(),
+      sections,
+      stats: {
+        sections: sections.length,
+        pages: grouped.length,
+        words: wordCount
+      }
+    };
+
+    state.documents.push(documentRecord);
+    if (elements.documentName) {
+      elements.documentName.value = '';
+    }
+    log(
+      `Created document "${name}" with ${documentRecord.stats.sections} section${
+        documentRecord.stats.sections === 1 ? '' : 's'
+      } from ${documentRecord.stats.pages} page${documentRecord.stats.pages === 1 ? '' : 's'}.`,
+      'success'
+    );
+    renderDocuments();
+  }
+
+  function handleDocumentListClick(event) {
+    const button = event.target.closest('button[data-doc-id]');
+    if (!button) return;
+    const docId = button.dataset.docId;
+    if (!docId) return;
+
+    if (button.dataset.action === 'remove') {
+      removeDocument(docId);
+      return;
+    }
+
+    const format = button.dataset.format;
+    if (format) {
+      exportDocument(docId, format);
+    }
+  }
+
+  function removeDocument(docId) {
+    const index = state.documents.findIndex((doc) => doc.id === docId);
+    if (index === -1) {
+      log('Unable to find the requested document.', 'error');
+      return;
+    }
+    const [removed] = state.documents.splice(index, 1);
+    log(`Removed document "${removed.name}".`, 'info');
+    renderDocuments();
+  }
+
+  function renderDocuments() {
+    if (!elements.documentList) return;
+
+    if (state.results.length === 0) {
+      elements.documentList.hidden = true;
+      elements.documentList.innerHTML = '';
+      return;
+    }
+
+    if (state.documents.length === 0) {
+      elements.documentList.hidden = false;
+      elements.documentList.innerHTML =
+        '<p class="document-empty">No custom documents yet. Select sections above and create your first document.</p>';
+      return;
+    }
+
+    const cards = state.documents
+      .map((doc) => {
+        const createdDate = new Date(doc.createdAt);
+        const preview = doc.sections
+          .slice(0, 4)
+          .map((section) => `<li>${escapeHtml(section.heading)}<span>${escapeHtml(section.pageTitle)}</span></li>`)
+          .join('');
+        return `
+          <article class="document-card" data-doc-id="${doc.id}">
+            <header>
+              <h3>${escapeHtml(doc.name)}</h3>
+              <div class="meta">
+                <span>${doc.stats.sections} section${doc.stats.sections === 1 ? '' : 's'}</span>
+                <span>${doc.stats.pages} page${doc.stats.pages === 1 ? '' : 's'}</span>
+                <span>${doc.stats.words.toLocaleString()} words</span>
+              </div>
+            </header>
+            <div class="meta">
+              <span>Created ${createdDate.toLocaleString()}</span>
+            </div>
+            <ul class="doc-section-preview">
+              ${preview}
+            </ul>
+            <footer>
+              <button type="button" class="control" data-doc-id="${doc.id}" data-format="markdown">Markdown</button>
+              <button type="button" class="control" data-doc-id="${doc.id}" data-format="html">HTML</button>
+              <button type="button" class="control" data-doc-id="${doc.id}" data-format="json">JSON</button>
+              <button type="button" class="control" data-doc-id="${doc.id}" data-action="remove">Remove</button>
+            </footer>
+          </article>
+        `;
+      })
+      .join('');
+
+    elements.documentList.hidden = false;
+    elements.documentList.innerHTML = cards;
+  }
+
+  function exportDocument(docId, format) {
+    const doc = state.documents.find((item) => item.id === docId);
+    if (!doc) {
+      log('Unable to find the requested document.', 'error');
+      return;
+    }
+
+    const slug = slugify(doc.name, 'adxs-document');
+    switch (format) {
+      case 'markdown':
+        downloadFile(`${slug}.md`, convertDocumentToMarkdown(doc), 'text/markdown');
+        break;
+      case 'html':
+        downloadFile(`${slug}.html`, convertDocumentToHtml(doc), 'text/html');
+        break;
+      case 'json':
+        downloadFile(`${slug}.json`, JSON.stringify(doc, null, 2), 'application/json');
+        break;
+      default:
+        log(`Unsupported document export format: ${format}`, 'error');
+    }
+  }
+
+  function convertDocumentToMarkdown(doc) {
+    const lines = [
+      `# ${doc.name}`,
+      '',
+      `Generated: ${doc.createdAt}`,
+      `Sections: ${doc.stats.sections}`,
+      `Pages: ${doc.stats.pages}`,
+      `Words: ${doc.stats.words}`,
+      ''
+    ];
+
+    const grouped = groupSectionsByPage(doc.sections);
+    grouped.forEach((group) => {
+      lines.push(`## ${group.pageTitle}`);
+      lines.push(group.pageUrl);
+      lines.push('');
+      group.sections.forEach((section) => {
+        lines.push(`### ${section.heading}`);
+        lines.push(section.text);
+        lines.push('');
+      });
+    });
+
+    return lines.join('\n');
+  }
+
+  function convertDocumentToHtml(doc) {
+    const grouped = groupSectionsByPage(doc.sections);
+    const body = grouped
+      .map((group) => {
+        const sectionsHtml = group.sections
+          .map(
+            (section) => `
+            <section id="${escapeHtml(section.sectionId)}">
+              <h3>${escapeHtml(section.heading)}</h3>
+              <div>${section.html}</div>
+            </section>`
+          )
+          .join('\n');
+
+        return `
+        <article class="page-result">
+          <header>
+            <h2>${escapeHtml(group.pageTitle)}</h2>
+            <p><a href="${group.pageUrl}">${group.pageUrl}</a></p>
+          </header>
+          ${sectionsHtml}
+        </article>`;
+      })
+      .join('\n');
+
+    const wordsFormatted = doc.stats.words.toLocaleString();
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>${escapeHtml(doc.name)} — ADXS export</title>
+<style>
+body { font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 960px; line-height: 1.6; color: #0f172a; }
+h1, h2, h3 { font-weight: 600; }
+.page-result { margin-bottom: 3rem; border-bottom: 1px solid #cbd5f5; padding-bottom: 2rem; }
+.page-result header h2 { margin-bottom: 0.25rem; }
+.page-result header p { margin-top: 0; }
+section { margin-bottom: 1.5rem; }
+section h3 { margin-top: 0; }
+</style>
+</head>
+<body>
+<h1>${escapeHtml(doc.name)}</h1>
+<p>Generated: ${doc.createdAt}</p>
+<p>Sections: ${doc.stats.sections} • Pages: ${doc.stats.pages} • Words: ${wordsFormatted}</p>
+${body}
+</body>
+</html>`;
+  }
+
+  function groupSectionsByPage(sections) {
+    const groups = [];
+    sections.forEach((section) => {
+      let group = groups.find((entry) => entry.pageUrl === section.pageUrl);
+      if (!group) {
+        group = { pageUrl: section.pageUrl, pageTitle: section.pageTitle, sections: [] };
+        groups.push(group);
+      }
+      group.sections.push(section);
+    });
+    return groups;
+  }
+
+  function slugify(value, fallback = 'document') {
+    const base = normaliseWhitespace(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const slug = base || fallback;
+    return slug.slice(0, 80);
+  }
+
+  function countWords(text) {
+    const normalised = normaliseWhitespace(text);
+    if (!normalised) return 0;
+    return normalised.split(' ').filter(Boolean).length;
+  }
+
+  function normaliseWhitespace(value) {
+    return (value ?? '').replace(/\s+/g, ' ').trim();
+  }
+
+  function extractTooltipContent(doc, ...nodes) {
+    let html = '';
+    for (const node of nodes) {
+      if (!node || typeof node.getAttribute !== 'function') continue;
+      const candidate =
+        node.getAttribute('data-tippy-content') ||
+        node.getAttribute('data-tooltip') ||
+        node.getAttribute('title') ||
+        node.getAttribute('data-original-title');
+      if (candidate) {
+        html = candidate.trim();
+        break;
+      }
+    }
+
+    if (!html) {
+      return { text: '', html: '' };
+    }
+
+    const container = doc.createElement('div');
+    container.innerHTML = html;
+    const text = normaliseWhitespace(container.textContent);
+    const sanitisedHtml = container.innerHTML.trim() || html;
+    return { text, html: sanitisedHtml };
+  }
+
+  function resolveCitationAnchor(node) {
+    if (!node) return null;
+    if (node.tagName === 'A') {
+      return node;
+    }
+    const directAnchor = node.querySelector('a.footnote-ref, a[role="doc-noteref"], a[href], a');
+    if (directAnchor) {
+      return directAnchor;
+    }
+    if (node.tagName === 'SUP' || node.tagName === 'SPAN') {
+      const spanWithTooltip = node.querySelector('span[data-tippy-content], span[data-tooltip], span');
+      if (spanWithTooltip) {
+        const nestedAnchor = spanWithTooltip.querySelector('a');
+        return nestedAnchor || spanWithTooltip;
+      }
+    }
+    return node;
+  }
+
+  function ensureHttpContext() {
+    const isHttp = window.location.protocol === 'http:' || window.location.protocol === 'https:';
+    if (!isHttp) {
+      updateProxyWarning(true);
+      log('Start the helper server with npm run dev and open http://localhost:3000 before scraping.', 'error');
+      return false;
+    }
+    updateProxyWarning(false);
+    return true;
+  }
+
+  function updateProxyWarning(forceShow = false) {
+    if (!elements.proxyWarning) return;
+    const isHttp = window.location.protocol === 'http:' || window.location.protocol === 'https:';
+    const shouldShow = forceShow || !isHttp;
+    elements.proxyWarning.hidden = !shouldShow;
+  }
+
+  function buildProxyUrl(targetUrl) {
+    if (!targetUrl) {
+      throw new Error('Missing target URL for proxy request.');
+    }
+
+    const parsed = new URL(targetUrl);
+    if (!/^https?:$/.test(parsed.protocol)) {
+      throw new Error(`Unsupported protocol for ${targetUrl}`);
+    }
+
+    const origin = window.location.origin;
+    if (!origin || origin === 'null') {
+      throw new Error('Local helper server unavailable. Run npm run dev and reload from http://localhost:3000.');
+    }
+
+    const endpoint = new URL('/api/fetch', origin);
+    endpoint.searchParams.set('url', targetUrl);
+    endpoint.searchParams.set('_ts', Date.now().toString());
+    return endpoint.toString();
   }
 
   function renderLogs() {
