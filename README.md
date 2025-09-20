@@ -83,7 +83,9 @@ The script writes to `context-dump.md` in the project root and records the gener
 test `git status --short`, and the last 20 commits from `git log --oneline`.
 
 To keep the export focused on hand-edited assets, the crawler deliberately skips the `.git`, `node_modules`, `dist`, `build`,
-`.next`, `out`, `.cache`, `coverage`, `tmp`, and `logs` directories, along with the generated `context-dump.md` file itself.
+`.next`, `out`, `.cache`, `coverage`, and `tmp` directories, along with the generated `context-dump.md` file itself. The `logs/`
+tree is now included in the crawl so recent helper output is preserved in the snapshot; set the environment variable
+`DUMP_CONTEXT_INCLUDE_LOGS=false` if you prefer to exclude it again.
 
 ## Troubleshooting
 
